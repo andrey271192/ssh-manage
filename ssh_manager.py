@@ -761,6 +761,10 @@ class TerminalWidget(tk.Frame):
         self.text.bind("<Control-d>", lambda e: self._send("\x04"))
         self.text.bind("<Control-l>", lambda e: self._send("\x0c"))
         self.text.bind("<Control-z>", lambda e: self._send("\x1a"))
+        # macOS: Command+V paste into terminal, Command+C copy selection
+        if sys.platform == "darwin":
+            self.text.bind("<Command-v>", self._term_paste)
+            self.text.bind("<Command-c>", self._term_copy)
 
         self.text.tag_configure("error", foreground="#f38ba8")
         self.text.tag_configure("info", foreground="#89b4fa")
@@ -829,8 +833,30 @@ class TerminalWidget(tk.Frame):
                 pass
         return "break"
 
+    def _term_paste(self, event=None):
+        """Paste clipboard into SSH terminal (send text to remote)."""
+        try:
+            text = self.text.clipboard_get()
+            if text:
+                self._send(text)
+        except tk.TclError:
+            pass
+        return "break"
+
+    def _term_copy(self, event=None):
+        """Copy selected text from terminal."""
+        try:
+            if self.text.tag_ranges(tk.SEL):
+                self.text.clipboard_clear()
+                self.text.clipboard_append(self.text.get(tk.SEL_FIRST, tk.SEL_LAST))
+        except tk.TclError:
+            pass
+        return "break"
+
     def _on_key(self, event):
         if event.state & 4:  # Ctrl
+            return
+        if event.state & 8:  # Mod1 / Command on macOS — let bindings handle it
             return
         if event.char and ord(event.char) >= 32:
             self._send(event.char)
