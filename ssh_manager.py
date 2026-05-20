@@ -490,6 +490,61 @@ def agent_search(query):
     return results[:12]
 
 
+def setup_entry_clipboard(entry):
+    """Add clipboard support (Ctrl/Cmd+C/V/X/A) and right-click menu to tk.Entry."""
+    mod = "Command" if sys.platform == "darwin" else "Control"
+
+    def _paste(e=None):
+        try:
+            text = entry.clipboard_get()
+            if entry.selection_present():
+                entry.delete(tk.SEL_FIRST, tk.SEL_LAST)
+            entry.insert(tk.INSERT, text)
+        except tk.TclError:
+            pass
+        return "break"
+
+    def _copy(e=None):
+        if entry.selection_present():
+            entry.clipboard_clear()
+            entry.clipboard_append(entry.selection_get())
+        return "break"
+
+    def _cut(e=None):
+        if entry.selection_present():
+            _copy()
+            entry.delete(tk.SEL_FIRST, tk.SEL_LAST)
+        return "break"
+
+    def _select_all(e=None):
+        entry.select_range(0, tk.END)
+        entry.icursor(tk.END)
+        return "break"
+
+    def _context_menu(event):
+        menu = tk.Menu(entry, tearoff=0, bg="#313244", fg="#cdd6f4",
+                       activebackground="#45475a")
+        menu.add_command(label="Вырезать", command=_cut)
+        menu.add_command(label="Копировать", command=_copy)
+        menu.add_command(label="Вставить", command=_paste)
+        menu.add_separator()
+        menu.add_command(label="Выделить всё", command=_select_all)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    entry.bind(f"<{mod}-v>", _paste)
+    entry.bind(f"<{mod}-V>", _paste)
+    entry.bind(f"<{mod}-c>", _copy)
+    entry.bind(f"<{mod}-C>", _copy)
+    entry.bind(f"<{mod}-x>", _cut)
+    entry.bind(f"<{mod}-X>", _cut)
+    entry.bind(f"<{mod}-a>", _select_all)
+    entry.bind(f"<{mod}-A>", _select_all)
+    entry.bind("<Button-3>", _context_menu)
+    if sys.platform == "darwin":
+        entry.bind("<Button-2>", _context_menu)
+        entry.bind("<Control-Button-1>", _context_menu)
+
+
 def app_dir():
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
@@ -829,6 +884,7 @@ class SessionDialog(tk.Toplevel):
                 entry.configure(show="*")
             entry.insert(0, default)
             entry.grid(row=i, column=1, sticky="ew", pady=3, padx=(8, 0))
+            setup_entry_clipboard(entry)
             self.entries[key] = entry
 
         row_group = len(fields)
@@ -926,6 +982,7 @@ class AISettingsDialog(tk.Toplevel):
                                    font=("Consolas", 9), show="*")
         self.claude_key.insert(0, config.get("claude_api_key", ""))
         self.claude_key.pack(fill=tk.X, pady=(2, 8))
+        setup_entry_clipboard(self.claude_key)
 
         tk.Label(frame, text="DeepSeek API Key:", bg="#1e1e2e", fg="#cdd6f4",
                  font=("Consolas", 10)).pack(anchor="w")
@@ -934,6 +991,7 @@ class AISettingsDialog(tk.Toplevel):
                                       font=("Consolas", 9), show="*")
         self.deepseek_key.insert(0, config.get("deepseek_api_key", ""))
         self.deepseek_key.pack(fill=tk.X, pady=(2, 12))
+        setup_entry_clipboard(self.deepseek_key)
 
         btn_frame = tk.Frame(frame, bg="#1e1e2e")
         btn_frame.pack()
@@ -1192,11 +1250,13 @@ class App(tk.Tk):
         self.q_host = tk.Entry(row1, width=14, bg="#313244", fg="#cdd6f4",
                                insertbackground="#cdd6f4", relief=tk.FLAT, font=("Consolas", 9))
         self.q_host.pack(side=tk.LEFT, padx=(4, 6))
+        setup_entry_clipboard(self.q_host)
         tk.Label(row1, text="Порт:", bg="#181825", fg="#6c7086", font=("Consolas", 9)).pack(side=tk.LEFT)
         self.q_port = tk.Entry(row1, width=5, bg="#313244", fg="#cdd6f4",
                                insertbackground="#cdd6f4", relief=tk.FLAT, font=("Consolas", 9))
         self.q_port.insert(0, "22")
         self.q_port.pack(side=tk.LEFT, padx=4)
+        setup_entry_clipboard(self.q_port)
 
         row2 = tk.Frame(qf, bg="#181825")
         row2.pack(fill=tk.X, pady=1)
@@ -1205,10 +1265,12 @@ class App(tk.Tk):
                                insertbackground="#cdd6f4", relief=tk.FLAT, font=("Consolas", 9))
         self.q_user.insert(0, "root")
         self.q_user.pack(side=tk.LEFT, padx=(4, 6))
+        setup_entry_clipboard(self.q_user)
         tk.Label(row2, text="Пароль:", bg="#181825", fg="#6c7086", font=("Consolas", 9)).pack(side=tk.LEFT)
         self.q_pass = tk.Entry(row2, width=10, bg="#313244", fg="#cdd6f4", show="*",
                                insertbackground="#cdd6f4", relief=tk.FLAT, font=("Consolas", 9))
         self.q_pass.pack(side=tk.LEFT, padx=4)
+        setup_entry_clipboard(self.q_pass)
 
         tk.Button(qf, text="Подключиться", bg="#89b4fa", fg="#1e1e2e",
                   activebackground="#6c8fff", relief=tk.FLAT,
@@ -1430,6 +1492,7 @@ class App(tk.Tk):
                                    insertbackground="#cdd6f4", relief=tk.FLAT,
                                    font=("Consolas", 9))
         self.cmd_search.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
+        setup_entry_clipboard(self.cmd_search)
         self.cmd_search.bind("<KeyRelease>", self._filter_commands)
 
         # Commands tree
@@ -1488,6 +1551,7 @@ class App(tk.Tk):
                                      insertbackground="#cdd6f4", relief=tk.FLAT,
                                      font=("Consolas", 10))
         self.agent_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        setup_entry_clipboard(self.agent_entry)
         self.agent_entry.insert(0, "как обновить ubuntu?")
         self.agent_entry.bind("<Return>", lambda e: self._agent_ask())
 
