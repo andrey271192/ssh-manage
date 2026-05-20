@@ -1,10 +1,11 @@
 """
-KU SSH Manager — Portable SSH client with auto-save sessions.
+PCA SSH — Private Control Administration
+SSH client with card-based UI, AI agents (Claude/DeepSeek), and auto-save sessions.
 Tkinter GUI + paramiko SSH + JSON session store.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, font as tkfont
+from tkinter import ttk, messagebox, font as tkfont, simpledialog
 import paramiko
 import threading
 import json
@@ -13,12 +14,27 @@ import sys
 import re
 import base64
 import socket
+import urllib.request
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "PCA SSH"
 APP_SUBTITLE = "Private Control Administration"
-VERSION = "1.1"
+VERSION = "2.0"
+
+# ── Card Colors (Catppuccin) ──────────────────────────────────
+
+CARD_COLORS = [
+    "#89b4fa",  # blue
+    "#a6e3a1",  # green
+    "#cba6f7",  # purple
+    "#fab387",  # orange
+    "#f38ba8",  # red
+    "#94e2d5",  # teal
+    "#f9e2af",  # yellow
+    "#89dceb",  # sky
+]
 
 # ── Quick Commands ─────────────────────────────────────────────
 
@@ -446,6 +462,19 @@ AGENT_KB = [
     ]),
 ]
 
+AI_SYSTEM_PROMPT = """Ты — SSH-ассистент в программе PCA SSH. Помогай пользователю командами для Linux (Ubuntu/Debian/CentOS) и Keenetic роутеров (NDMS CLI).
+
+Правила:
+1. Отвечай ТОЛЬКО командами с кратким описанием
+2. Формат ответа — каждая команда на новой строке: КОМАНДА — описание
+3. Максимум 8 команд в ответе
+4. Указывай платформу: [linux] или [keenetic]
+5. Если вопрос про роутер/кинетик — давай команды NDMS CLI
+6. Если вопрос про сервер/линукс — давай bash-команды
+7. Отвечай по-русски
+8. Не добавляй лишних пояснений, только команды"""
+
+
 def agent_search(query):
     query_lower = query.lower()
     results = []
@@ -466,7 +495,41 @@ def app_dir():
         return Path(sys.executable).parent
     return Path(__file__).parent
 
+
 SESSIONS_FILE = app_dir() / "sessions.json"
+CONFIG_FILE = app_dir() / "pca_config.json"
+
+
+# ── Config Store ──────────────────────────────────────────────
+
+class ConfigStore:
+    def __init__(self, path=CONFIG_FILE):
+        self.path = Path(path)
+        self.data = {
+            "ai_provider": "local",
+            "claude_api_key": "",
+            "deepseek_api_key": "",
+            "commands_visible": True,
+        }
+        self.load()
+
+    def load(self):
+        if self.path.exists():
+            try:
+                self.data.update(json.loads(self.path.read_text("utf-8")))
+            except Exception:
+                pass
+
+    def save(self):
+        self.path.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), "utf-8")
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+    def set(self, key, value):
+        self.data[key] = value
+        self.save()
+
 
 # ── Session Store ──────────────────────────────────────────────
 
@@ -591,13 +654,6 @@ class SessionStore:
 
 # ── ANSI Parser ────────────────────────────────────────────────
 
-ANSI_COLORS = {
-    "30": "#1a1a1a", "31": "#cc4444", "32": "#44cc44", "33": "#cccc44",
-    "34": "#4488cc", "35": "#cc44cc", "36": "#44cccc", "37": "#cccccc",
-    "90": "#666666", "91": "#ff6666", "92": "#66ff66", "93": "#ffff66",
-    "94": "#6699ff", "95": "#ff66ff", "96": "#66ffff", "97": "#ffffff",
-}
-
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\x1b\[[\?]?[0-9;]*[hlmJKHfGr]")
 
 
@@ -652,8 +708,6 @@ class TerminalWidget(tk.Frame):
 
         self.text.tag_configure("error", foreground="#f38ba8")
         self.text.tag_configure("info", foreground="#89b4fa")
-        for code, color in ANSI_COLORS.items():
-            self.text.tag_configure(f"fg{code}", foreground=color)
 
     def connect(self, host, port, user, password):
         self.running = True
@@ -675,7 +729,7 @@ class TerminalWidget(tk.Frame):
                 term="xterm-256color", width=cols, height=rows
             )
             self.channel.settimeout(0.1)
-            self._write(f"Подключено!\n", "info")
+            self._write("Подключено!\n", "info")
             self._read_loop()
         except Exception as ex:
             self._write(f"\nОшибка: {ex}\n", "error")
@@ -684,7 +738,6 @@ class TerminalWidget(tk.Frame):
                 self.after(100, self.on_close)
 
     def _read_loop(self):
-        buf = b""
         while self.running and self.channel and not self.channel.closed:
             try:
                 data = self.channel.recv(4096)
@@ -750,9 +803,10 @@ class SessionDialog(tk.Toplevel):
         self.title(title)
         self.result = None
         self.resizable(False, False)
+        self.configure(bg="#1e1e2e")
         self.grab_set()
 
-        frame = ttk.Frame(self, padding=15)
+        frame = tk.Frame(self, bg="#1e1e2e", padx=15, pady=15)
         frame.pack(fill=tk.BOTH, expand=True)
 
         fields = [
@@ -766,18 +820,21 @@ class SessionDialog(tk.Toplevel):
 
         self.entries = {}
         for i, (label, key, default) in enumerate(fields):
-            ttk.Label(frame, text=label).grid(row=i, column=0, sticky="w", pady=3)
-            entry = ttk.Entry(frame, width=35)
+            tk.Label(frame, text=label, bg="#1e1e2e", fg="#cdd6f4",
+                     font=("Consolas", 10)).grid(row=i, column=0, sticky="w", pady=3)
+            entry = tk.Entry(frame, width=35, bg="#313244", fg="#cdd6f4",
+                             insertbackground="#cdd6f4", relief=tk.FLAT,
+                             font=("Consolas", 10))
             if key == "password":
                 entry.configure(show="*")
             entry.insert(0, default)
             entry.grid(row=i, column=1, sticky="ew", pady=3, padx=(8, 0))
             self.entries[key] = entry
 
-        # Group selector
         row_group = len(fields)
-        ttk.Label(frame, text="Группа:").grid(row=row_group, column=0, sticky="w", pady=3)
-        group_frame = ttk.Frame(frame)
+        tk.Label(frame, text="Группа:", bg="#1e1e2e", fg="#cdd6f4",
+                 font=("Consolas", 10)).grid(row=row_group, column=0, sticky="w", pady=3)
+        group_frame = tk.Frame(frame, bg="#1e1e2e")
         group_frame.grid(row=row_group, column=1, sticky="ew", pady=3, padx=(8, 0))
 
         group_values = groups or []
@@ -787,15 +844,21 @@ class SessionDialog(tk.Toplevel):
                                          values=group_values, width=20)
         self.group_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        btn_frame = ttk.Frame(frame)
+        btn_frame = tk.Frame(frame, bg="#1e1e2e")
         btn_frame.grid(row=row_group + 1, column=0, columnspan=2, pady=(12, 0))
-        ttk.Button(btn_frame, text="OK", command=self._ok).pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_frame, text="Отмена", command=self.destroy).pack(side=tk.LEFT, padx=4)
+
+        ok_btn = tk.Button(btn_frame, text="OK", bg="#45475a", fg="#cdd6f4",
+                           activebackground="#585b70", relief=tk.FLAT,
+                           font=("Consolas", 10), padx=20, pady=4, command=self._ok)
+        ok_btn.pack(side=tk.LEFT, padx=4)
+        cancel_btn = tk.Button(btn_frame, text="Отмена", bg="#45475a", fg="#cdd6f4",
+                               activebackground="#585b70", relief=tk.FLAT,
+                               font=("Consolas", 10), padx=20, pady=4, command=self.destroy)
+        cancel_btn.pack(side=tk.LEFT, padx=4)
 
         self.entries["host"].focus_set()
         self.bind("<Return>", lambda e: self._ok())
         self.bind("<Escape>", lambda e: self.destroy())
-
         self.wait_window()
 
     def _ok(self):
@@ -820,29 +883,153 @@ class SessionDialog(tk.Toplevel):
         self.destroy()
 
 
+# ── AI Agent Settings Dialog ──────────────────────────────────
+
+class AISettingsDialog(tk.Toplevel):
+    def __init__(self, parent, config):
+        super().__init__(parent)
+        self.title("Настройки AI-агента")
+        self.config = config
+        self.result = None
+        self.resizable(False, False)
+        self.configure(bg="#1e1e2e")
+        self.grab_set()
+
+        frame = tk.Frame(self, bg="#1e1e2e", padx=20, pady=20)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(frame, text="AI-провайдер", bg="#1e1e2e", fg="#cdd6f4",
+                 font=("Consolas", 12, "bold")).pack(anchor="w", pady=(0, 10))
+
+        self.provider_var = tk.StringVar(value=config.get("ai_provider", "local"))
+
+        providers = [
+            ("local", "Локальная база (без API)"),
+            ("claude", "Claude API (Anthropic)"),
+            ("deepseek", "DeepSeek API"),
+        ]
+        for val, label in providers:
+            rb = tk.Radiobutton(
+                frame, text=label, variable=self.provider_var, value=val,
+                bg="#1e1e2e", fg="#cdd6f4", selectcolor="#313244",
+                activebackground="#1e1e2e", activeforeground="#cdd6f4",
+                font=("Consolas", 10),
+            )
+            rb.pack(anchor="w", pady=2)
+
+        tk.Frame(frame, bg="#45475a", height=1).pack(fill=tk.X, pady=10)
+
+        tk.Label(frame, text="Claude API Key:", bg="#1e1e2e", fg="#cdd6f4",
+                 font=("Consolas", 10)).pack(anchor="w")
+        self.claude_key = tk.Entry(frame, width=50, bg="#313244", fg="#cdd6f4",
+                                   insertbackground="#cdd6f4", relief=tk.FLAT,
+                                   font=("Consolas", 9), show="*")
+        self.claude_key.insert(0, config.get("claude_api_key", ""))
+        self.claude_key.pack(fill=tk.X, pady=(2, 8))
+
+        tk.Label(frame, text="DeepSeek API Key:", bg="#1e1e2e", fg="#cdd6f4",
+                 font=("Consolas", 10)).pack(anchor="w")
+        self.deepseek_key = tk.Entry(frame, width=50, bg="#313244", fg="#cdd6f4",
+                                      insertbackground="#cdd6f4", relief=tk.FLAT,
+                                      font=("Consolas", 9), show="*")
+        self.deepseek_key.insert(0, config.get("deepseek_api_key", ""))
+        self.deepseek_key.pack(fill=tk.X, pady=(2, 12))
+
+        btn_frame = tk.Frame(frame, bg="#1e1e2e")
+        btn_frame.pack()
+        tk.Button(btn_frame, text="Сохранить", bg="#89b4fa", fg="#1e1e2e",
+                  activebackground="#6c8fff", relief=tk.FLAT,
+                  font=("Consolas", 10, "bold"), padx=20, pady=4,
+                  command=self._save).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_frame, text="Отмена", bg="#45475a", fg="#cdd6f4",
+                  activebackground="#585b70", relief=tk.FLAT,
+                  font=("Consolas", 10), padx=20, pady=4,
+                  command=self.destroy).pack(side=tk.LEFT, padx=4)
+
+        self.wait_window()
+
+    def _save(self):
+        self.result = {
+            "ai_provider": self.provider_var.get(),
+            "claude_api_key": self.claude_key.get().strip(),
+            "deepseek_api_key": self.deepseek_key.get().strip(),
+        }
+        self.destroy()
+
+
+# ── AI API Caller ─────────────────────────────────────────────
+
+def call_claude_api(api_key, query):
+    url = "https://api.anthropic.com/v1/messages"
+    payload = json.dumps({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "system": AI_SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": query}],
+    }).encode("utf-8")
+
+    req = urllib.request.Request(url, data=payload, method="POST")
+    req.add_header("x-api-key", api_key)
+    req.add_header("anthropic-version", "2023-06-01")
+    req.add_header("content-type", "application/json")
+
+    resp = urllib.request.urlopen(req, timeout=30)
+    data = json.loads(resp.read().decode("utf-8"))
+    text = ""
+    for block in data.get("content", []):
+        if block.get("type") == "text":
+            text += block["text"]
+    return text
+
+
+def call_deepseek_api(api_key, query):
+    url = "https://api.deepseek.com/v1/chat/completions"
+    payload = json.dumps({
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": AI_SYSTEM_PROMPT},
+            {"role": "user", "content": query},
+        ],
+        "max_tokens": 1024,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(url, data=payload, method="POST")
+    req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("Content-Type", "application/json")
+
+    resp = urllib.request.urlopen(req, timeout=30)
+    data = json.loads(resp.read().decode("utf-8"))
+    choices = data.get("choices", [])
+    if choices:
+        return choices[0].get("message", {}).get("content", "")
+    return ""
+
+
 # ── Main Application ───────────────────────────────────────────
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"{APP_NAME} — {APP_SUBTITLE} v{VERSION}")
-        self.geometry("1100x700")
-        self.minsize(800, 500)
+        self.geometry("1200x750")
+        self.minsize(900, 550)
         self.configure(bg="#1e1e2e")
 
         self.store = SessionStore()
-        self.terminals = {}  # tab_id -> TerminalWidget
+        self.config = ConfigStore()
+        self.terminals = {}
+        self._commands_visible = self.config.get("commands_visible", True)
+        self._selected_card_idx = None
 
         self._apply_theme()
         self._build_ui()
-        self._refresh_session_list()
+        self._refresh_cards()
 
     def _apply_theme(self):
         style = ttk.Style()
         style.theme_use("clam")
         bg = "#1e1e2e"
         fg = "#cdd6f4"
-        sel = "#45475a"
 
         style.configure(".", background=bg, foreground=fg, fieldbackground="#313244", borderwidth=0)
         style.configure("TFrame", background=bg)
@@ -852,11 +1039,12 @@ class App(tk.Tk):
         style.configure("Treeview", background="#313244", foreground=fg, fieldbackground="#313244",
                          rowheight=28, borderwidth=0)
         style.configure("Treeview.Heading", background="#45475a", foreground=fg)
-        style.map("Treeview", background=[("selected", sel)])
-        style.configure("TEntry", fieldbackground="#313244", foreground=fg)
+        style.map("Treeview", background=[("selected", "#45475a")])
         style.configure("TNotebook", background=bg, borderwidth=0)
         style.configure("TNotebook.Tab", background="#45475a", foreground=fg, padding=(12, 6))
         style.map("TNotebook.Tab", background=[("selected", "#585b70")])
+        style.configure("TEntry", fieldbackground="#313244", foreground=fg)
+        style.configure("TCombobox", fieldbackground="#313244", foreground=fg)
 
     def _open_url(self, url):
         import webbrowser
@@ -884,17 +1072,12 @@ class App(tk.Tk):
 
         brand_frame = tk.Frame(top_bar, bg="#181825")
         brand_frame.pack(side=tk.LEFT, pady=4)
-        tk.Label(
-            brand_frame, text=APP_NAME, bg="#181825", fg="#cdd6f4",
-            font=("Consolas", 13, "bold"),
-        ).pack(anchor="w")
-        tk.Label(
-            brand_frame, text=APP_SUBTITLE, bg="#181825", fg="#6c7086",
-            font=("Consolas", 9),
-        ).pack(anchor="w")
+        tk.Label(brand_frame, text=APP_NAME, bg="#181825", fg="#cdd6f4",
+                 font=("Consolas", 13, "bold")).pack(anchor="w")
+        tk.Label(brand_frame, text=APP_SUBTITLE, bg="#181825", fg="#6c7086",
+                 font=("Consolas", 9)).pack(anchor="w")
 
-        sep_v = tk.Frame(top_bar, bg="#45475a", width=1)
-        sep_v.pack(side=tk.LEFT, fill=tk.Y, padx=12, pady=8)
+        tk.Frame(top_bar, bg="#45475a", width=1).pack(side=tk.LEFT, fill=tk.Y, padx=12, pady=8)
 
         links = [
             ("GitHub", "https://github.com/nickolay-frolov"),
@@ -905,313 +1088,580 @@ class App(tk.Tk):
         for i, (text, url) in enumerate(links):
             if i > 0:
                 tk.Label(top_bar, text="·", bg="#181825", fg="#6c7086", font=("Consolas", 9)).pack(side=tk.LEFT)
-            lnk = tk.Label(
-                top_bar, text=text, bg="#181825", fg="#89b4fa",
-                font=("Consolas", 9, "underline"), cursor="hand2",
-            )
+            lnk = tk.Label(top_bar, text=text, bg="#181825", fg="#89b4fa",
+                           font=("Consolas", 9, "underline"), cursor="hand2")
             lnk.pack(side=tk.LEFT, padx=6)
             lnk.bind("<Button-1>", lambda e, u=url: self._open_url(u))
 
+        tk.Label(top_bar, text="@lot_andrey", bg="#181825", fg="#6c7086",
+                 font=("Consolas", 9)).pack(side=tk.RIGHT, padx=10)
+
+        # ── Main layout ──
+        main_frame = tk.Frame(self, bg="#1e1e2e")
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        # Left: card-based session panel
+        self.left_panel = tk.Frame(main_frame, bg="#1e1e2e", width=320)
+        self.left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 4))
+        self.left_panel.pack_propagate(False)
+        self._build_card_panel(self.left_panel)
+
+        # Center: terminal tabs
+        center_frame = tk.Frame(main_frame, bg="#1e1e2e")
+        center_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.notebook = ttk.Notebook(center_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+
+        # Welcome tab
+        welcome = tk.Frame(self.notebook, bg="#1e1e2e")
+        self.notebook.add(welcome, text="Добро пожаловать")
         tk.Label(
-            top_bar, text="@lot_andrey", bg="#181825", fg="#6c7086",
-            font=("Consolas", 9),
-        ).pack(side=tk.RIGHT, padx=10)
+            welcome,
+            text=f"{APP_NAME} v{VERSION}\n\n"
+                 "• Двойной клик по карточке = подключение\n"
+                 "• Быстрое подключение внизу слева\n"
+                 "• Все сессии сохраняются автоматически\n"
+                 "• Ctrl+C/D/L работают в терминале\n"
+                 "• AI-агент справа — спроси что угодно\n"
+                 "• Панель команд можно скрыть/показать",
+            font=("Consolas", 12),
+            justify=tk.CENTER,
+            bg="#1e1e2e",
+            fg="#cdd6f4",
+        ).pack(expand=True)
 
-        paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        # Right: commands + agent panel
+        self.right_panel = tk.Frame(main_frame, bg="#1e1e2e", width=360)
+        self.right_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(4, 0))
+        self.right_panel.pack_propagate(False)
+        self._build_right_panel(self.right_panel)
 
-        # ── Left: session list with groups ──
-        left = ttk.Frame(paned, width=300)
-        paned.add(left, weight=0)
+    # ── Card Panel (Left) ─────────────────────────────────────
 
-        toolbar = ttk.Frame(left)
-        toolbar.pack(fill=tk.X, pady=(0, 2))
-        ttk.Button(toolbar, text="＋ Сессия", command=self._new_session).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="✎", command=self._edit_session, width=3).pack(side=tk.LEFT, padx=1)
-        ttk.Button(toolbar, text="✕", command=self._delete_session, width=3).pack(side=tk.LEFT, padx=1)
+    def _build_card_panel(self, parent):
+        # Toolbar
+        toolbar = tk.Frame(parent, bg="#181825")
+        toolbar.pack(fill=tk.X)
 
-        toolbar2 = ttk.Frame(left)
-        toolbar2.pack(fill=tk.X, pady=(0, 4))
-        ttk.Button(toolbar2, text="＋ Группа", command=self._new_group).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar2, text="✎ Группа", command=self._rename_group).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar2, text="✕ Группа", command=self._delete_group).pack(side=tk.LEFT, padx=2)
+        btn_style = {"bg": "#45475a", "fg": "#cdd6f4", "activebackground": "#585b70",
+                     "relief": tk.FLAT, "font": ("Consolas", 9), "padx": 6, "pady": 3}
 
-        self.tree = ttk.Treeview(left, columns=("desc", "addr"), show="tree headings", selectmode="browse")
-        self.tree.heading("#0", text="Сессия")
-        self.tree.heading("desc", text="Описание")
-        self.tree.heading("addr", text="Адрес")
-        self.tree.column("#0", width=130, minwidth=80)
-        self.tree.column("desc", width=100, minwidth=60)
-        self.tree.column("addr", width=120, minwidth=70)
-        tree_scroll = ttk.Scrollbar(left, command=self.tree.yview)
-        self.tree.configure(yscrollcommand=tree_scroll.set)
+        tk.Button(toolbar, text="＋ Сессия", command=self._new_session, **btn_style).pack(side=tk.LEFT, padx=2, pady=3)
+        tk.Button(toolbar, text="＋ Группа", command=self._new_group, **btn_style).pack(side=tk.LEFT, padx=2, pady=3)
+        tk.Button(toolbar, text="✎", command=self._edit_session, width=3, **btn_style).pack(side=tk.LEFT, padx=1, pady=3)
+        tk.Button(toolbar, text="✕", command=self._delete_session, width=3, **btn_style).pack(side=tk.LEFT, padx=1, pady=3)
 
-        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree.pack(fill=tk.BOTH, expand=True)
-        self.tree.bind("<Double-1>", self._on_tree_double_click)
+        # Scrollable card area
+        self.card_canvas = tk.Canvas(parent, bg="#1e1e2e", highlightthickness=0)
+        card_scroll = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.card_canvas.yview)
+        self.card_canvas.configure(yscrollcommand=card_scroll.set)
 
-        # Drag & drop state
-        self._drag_item = None
-        self._drag_after_id = None
-        self.tree.bind("<ButtonPress-1>", self._drag_start)
-        self.tree.bind("<B1-Motion>", self._drag_motion)
-        self.tree.bind("<ButtonRelease-1>", self._drag_end)
+        card_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.card_canvas.pack(fill=tk.BOTH, expand=True)
 
-        # Right-click context menu
-        self._ctx_menu = tk.Menu(self, tearoff=0)
-        self._ctx_menu.configure(bg="#313244", fg="#cdd6f4", activebackground="#45475a")
-        self.tree.bind("<Button-3>", self._show_context_menu)
-        if sys.platform == "darwin":
-            self.tree.bind("<Button-2>", self._show_context_menu)
-            self.tree.bind("<Control-Button-1>", self._show_context_menu)
+        self.card_inner = tk.Frame(self.card_canvas, bg="#1e1e2e")
+        self.card_canvas_window = self.card_canvas.create_window((0, 0), window=self.card_inner, anchor="nw")
 
-        # Quick connect bar
-        qf = ttk.LabelFrame(left, text="Быстрое подключение", padding=8)
-        qf.pack(fill=tk.X, pady=(6, 0))
+        self.card_inner.bind("<Configure>", lambda e: self.card_canvas.configure(
+            scrollregion=self.card_canvas.bbox("all")))
+        self.card_canvas.bind("<Configure>", lambda e: self.card_canvas.itemconfigure(
+            self.card_canvas_window, width=e.width))
 
-        row1 = ttk.Frame(qf)
-        row1.pack(fill=tk.X, pady=2)
-        ttk.Label(row1, text="Хост:").pack(side=tk.LEFT)
-        self.q_host = ttk.Entry(row1, width=16)
-        self.q_host.pack(side=tk.LEFT, padx=(4, 8))
-        ttk.Label(row1, text="Порт:").pack(side=tk.LEFT)
-        self.q_port = ttk.Entry(row1, width=6)
+        # Mouse wheel scrolling
+        def _on_mousewheel(event):
+            if sys.platform == "darwin":
+                self.card_canvas.yview_scroll(-1 * event.delta, "units")
+            else:
+                self.card_canvas.yview_scroll(-1 * (event.delta // 120), "units")
+
+        self.card_canvas.bind("<MouseWheel>", _on_mousewheel)
+        self.card_canvas.bind("<Button-4>", lambda e: self.card_canvas.yview_scroll(-1, "units"))
+        self.card_canvas.bind("<Button-5>", lambda e: self.card_canvas.yview_scroll(1, "units"))
+
+        # Quick connect at bottom
+        qf = tk.Frame(parent, bg="#181825", padx=8, pady=8)
+        qf.pack(fill=tk.X, side=tk.BOTTOM)
+
+        tk.Label(qf, text="Быстрое подключение", bg="#181825", fg="#6c7086",
+                 font=("Consolas", 9, "bold")).pack(anchor="w", pady=(0, 4))
+
+        row1 = tk.Frame(qf, bg="#181825")
+        row1.pack(fill=tk.X, pady=1)
+        tk.Label(row1, text="Хост:", bg="#181825", fg="#6c7086", font=("Consolas", 9)).pack(side=tk.LEFT)
+        self.q_host = tk.Entry(row1, width=14, bg="#313244", fg="#cdd6f4",
+                               insertbackground="#cdd6f4", relief=tk.FLAT, font=("Consolas", 9))
+        self.q_host.pack(side=tk.LEFT, padx=(4, 6))
+        tk.Label(row1, text="Порт:", bg="#181825", fg="#6c7086", font=("Consolas", 9)).pack(side=tk.LEFT)
+        self.q_port = tk.Entry(row1, width=5, bg="#313244", fg="#cdd6f4",
+                               insertbackground="#cdd6f4", relief=tk.FLAT, font=("Consolas", 9))
         self.q_port.insert(0, "22")
         self.q_port.pack(side=tk.LEFT, padx=4)
 
-        row2 = ttk.Frame(qf)
-        row2.pack(fill=tk.X, pady=2)
-        ttk.Label(row2, text="Юзер:").pack(side=tk.LEFT)
-        self.q_user = ttk.Entry(row2, width=12)
+        row2 = tk.Frame(qf, bg="#181825")
+        row2.pack(fill=tk.X, pady=1)
+        tk.Label(row2, text="Юзер:", bg="#181825", fg="#6c7086", font=("Consolas", 9)).pack(side=tk.LEFT)
+        self.q_user = tk.Entry(row2, width=10, bg="#313244", fg="#cdd6f4",
+                               insertbackground="#cdd6f4", relief=tk.FLAT, font=("Consolas", 9))
         self.q_user.insert(0, "root")
-        self.q_user.pack(side=tk.LEFT, padx=(4, 8))
-        ttk.Label(row2, text="Пароль:").pack(side=tk.LEFT)
-        self.q_pass = ttk.Entry(row2, width=12, show="*")
+        self.q_user.pack(side=tk.LEFT, padx=(4, 6))
+        tk.Label(row2, text="Пароль:", bg="#181825", fg="#6c7086", font=("Consolas", 9)).pack(side=tk.LEFT)
+        self.q_pass = tk.Entry(row2, width=10, bg="#313244", fg="#cdd6f4", show="*",
+                               insertbackground="#cdd6f4", relief=tk.FLAT, font=("Consolas", 9))
         self.q_pass.pack(side=tk.LEFT, padx=4)
 
-        ttk.Button(qf, text="Подключиться", command=self._quick_connect).pack(fill=tk.X, pady=(6, 0))
+        tk.Button(qf, text="Подключиться", bg="#89b4fa", fg="#1e1e2e",
+                  activebackground="#6c8fff", relief=tk.FLAT,
+                  font=("Consolas", 9, "bold"), pady=3,
+                  command=self._quick_connect).pack(fill=tk.X, pady=(4, 0))
         self.q_host.bind("<Return>", lambda e: self._quick_connect())
         self.q_pass.bind("<Return>", lambda e: self._quick_connect())
 
-        # ── Center: terminal tabs ──
-        right_paned = ttk.PanedWindow(paned, orient=tk.HORIZONTAL)
-        paned.add(right_paned, weight=1)
+    def _refresh_cards(self):
+        for widget in self.card_inner.winfo_children():
+            widget.destroy()
 
-        self.notebook = ttk.Notebook(right_paned)
-        right_paned.add(self.notebook, weight=1)
+        grouped = {}
+        ungrouped = []
+        for i, s in enumerate(self.store.sessions):
+            g = s.get("group", "")
+            if g:
+                grouped.setdefault(g, []).append((i, s))
+            else:
+                ungrouped.append((i, s))
 
-        # ── Right: commands panel ──
-        cmd_frame = ttk.Frame(right_paned, width=320)
-        right_paned.add(cmd_frame, weight=0)
+        color_idx = 0
 
-        cmd_header = tk.Label(
-            cmd_frame, text="Команды", bg="#181825", fg="#cdd6f4",
-            font=("Consolas", 11, "bold"), pady=6,
+        # Grouped sessions
+        for g in self.store.groups:
+            color = CARD_COLORS[color_idx % len(CARD_COLORS)]
+            color_idx += 1
+            sessions = grouped.get(g, [])
+            self._create_group_section(self.card_inner, g, sessions, color)
+
+        # Extra groups from sessions
+        for g, items in grouped.items():
+            if g not in self.store.groups:
+                self.store.add_group(g)
+                color = CARD_COLORS[color_idx % len(CARD_COLORS)]
+                color_idx += 1
+                self._create_group_section(self.card_inner, g, items, color)
+
+        # Ungrouped
+        if ungrouped:
+            self._create_group_section(self.card_inner, "Без группы", ungrouped, "#6c7086")
+
+    def _create_group_section(self, parent, group_name, sessions, color):
+        # Group container with colored left border
+        group_frame = tk.Frame(parent, bg="#1e1e2e")
+        group_frame.pack(fill=tk.X, padx=4, pady=(6, 2))
+
+        # Group header
+        header = tk.Frame(group_frame, bg="#181825")
+        header.pack(fill=tk.X)
+
+        # Color indicator
+        tk.Frame(header, bg=color, width=4).pack(side=tk.LEFT, fill=tk.Y)
+
+        tk.Label(header, text=f"  {group_name}", bg="#181825", fg=color,
+                 font=("Consolas", 11, "bold"), pady=6).pack(side=tk.LEFT, fill=tk.X, expand=True, anchor="w")
+
+        count_text = f"{len(sessions)}"
+        tk.Label(header, text=count_text, bg="#181825", fg="#6c7086",
+                 font=("Consolas", 9), padx=8).pack(side=tk.RIGHT)
+
+        # Group context menu on header
+        if group_name != "Без группы":
+            def _group_menu(event, gn=group_name):
+                menu = tk.Menu(self, tearoff=0, bg="#313244", fg="#cdd6f4",
+                               activebackground="#45475a")
+                menu.add_command(label="Переименовать", command=lambda: self._rename_group_by_name(gn))
+                menu.add_command(label="Удалить группу", command=lambda: self._delete_group_by_name(gn))
+                menu.tk_popup(event.x_root, event.y_root)
+            header.bind("<Button-3>", _group_menu)
+            for w in header.winfo_children():
+                w.bind("<Button-3>", _group_menu)
+
+        # Cards grid
+        cards_frame = tk.Frame(group_frame, bg="#1e1e2e")
+        cards_frame.pack(fill=tk.X, padx=2, pady=(2, 4))
+
+        col = 0
+        row = 0
+        max_cols = 2
+
+        for idx, session in sessions:
+            card = self._create_session_card(cards_frame, session, idx, color)
+            card.grid(row=row, column=col, padx=3, pady=3, sticky="nsew")
+            col += 1
+            if col >= max_cols:
+                col = 0
+                row += 1
+
+        # Make columns expand evenly
+        for c in range(max_cols):
+            cards_frame.columnconfigure(c, weight=1)
+
+    def _create_session_card(self, parent, session, index, accent_color):
+        is_selected = (index == self._selected_card_idx)
+        card_bg = "#3b3b5c" if is_selected else "#313244"
+
+        card = tk.Frame(parent, bg=card_bg, padx=10, pady=8, cursor="hand2",
+                        highlightbackground=accent_color if is_selected else "#45475a",
+                        highlightthickness=2)
+
+        name = session.get("name", "???")
+        host = session.get("host", "")
+        port = session.get("port", 22)
+        desc = session.get("description", "")
+
+        # Name
+        name_label = tk.Label(card, text=name, bg=card_bg, fg="#cdd6f4",
+                              font=("Consolas", 10, "bold"), anchor="w")
+        name_label.pack(fill=tk.X)
+
+        # Description (if any)
+        if desc:
+            desc_label = tk.Label(card, text=desc, bg=card_bg, fg="#a6adc8",
+                                  font=("Consolas", 8), anchor="w")
+            desc_label.pack(fill=tk.X)
+
+        # Address
+        addr_text = f"{host}:{port}"
+        addr_label = tk.Label(card, text=addr_text, bg=card_bg, fg="#6c7086",
+                              font=("Consolas", 9), anchor="w")
+        addr_label.pack(fill=tk.X)
+
+        # Status dot
+        dot_color = accent_color
+        dot_canvas = tk.Canvas(card, width=8, height=8, bg=card_bg, highlightthickness=0)
+        dot_canvas.create_oval(1, 1, 7, 7, fill=dot_color, outline="")
+        dot_canvas.place(relx=1.0, rely=0.0, anchor="ne", x=-4, y=4)
+
+        # Bindings
+        def _enter(e):
+            if index != self._selected_card_idx:
+                card.configure(bg="#3b3b5c")
+                for w in card.winfo_children():
+                    if isinstance(w, tk.Label):
+                        w.configure(bg="#3b3b5c")
+                    elif isinstance(w, tk.Canvas):
+                        w.configure(bg="#3b3b5c")
+
+        def _leave(e):
+            bg = "#3b3b5c" if index == self._selected_card_idx else "#313244"
+            card.configure(bg=bg)
+            for w in card.winfo_children():
+                if isinstance(w, tk.Label):
+                    w.configure(bg=bg)
+                elif isinstance(w, tk.Canvas):
+                    w.configure(bg=bg)
+
+        def _click(e):
+            self._selected_card_idx = index
+            self._refresh_cards()
+
+        def _double_click(e):
+            self._connect_by_idx(index)
+
+        def _right_click(e):
+            self._show_card_context_menu(e, index)
+
+        for widget in [card, name_label, addr_label, dot_canvas] + ([desc_label] if desc else []):
+            widget.bind("<Enter>", _enter)
+            widget.bind("<Leave>", _leave)
+            widget.bind("<Button-1>", _click)
+            widget.bind("<Double-1>", _double_click)
+            widget.bind("<Button-3>", _right_click)
+            if sys.platform == "darwin":
+                widget.bind("<Button-2>", _right_click)
+                widget.bind("<Control-Button-1>", _right_click)
+
+        return card
+
+    def _show_card_context_menu(self, event, index):
+        menu = tk.Menu(self, tearoff=0, bg="#313244", fg="#cdd6f4",
+                       activebackground="#45475a")
+        menu.add_command(label="Подключиться", command=lambda: self._connect_by_idx(index))
+        menu.add_separator()
+
+        # Move to group submenu
+        move_menu = tk.Menu(menu, tearoff=0, bg="#313244", fg="#cdd6f4")
+        move_menu.add_command(label="Без группы", command=lambda: self._move_and_refresh(index, ""))
+        for g in self.store.groups:
+            move_menu.add_command(label=g, command=lambda g=g: self._move_and_refresh(index, g))
+        menu.add_cascade(label="Переместить в...", menu=move_menu)
+        menu.add_separator()
+        menu.add_command(label="Изменить", command=lambda: self._edit_session_by_idx(index))
+        menu.add_command(label="Удалить", command=lambda: self._delete_session_by_idx(index))
+
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _move_and_refresh(self, index, group):
+        self.store.move_to_group(index, group)
+        self._refresh_cards()
+
+    # ── Right Panel (Commands + Agent) ────────────────────────
+
+    def _build_right_panel(self, parent):
+        # Toggle button for commands
+        toggle_frame = tk.Frame(parent, bg="#181825")
+        toggle_frame.pack(fill=tk.X)
+
+        self._toggle_btn = tk.Button(
+            toggle_frame, text="Команды ▼" if self._commands_visible else "Команды ▶",
+            bg="#181825", fg="#89b4fa", activebackground="#181825", activeforeground="#6c8fff",
+            relief=tk.FLAT, font=("Consolas", 10, "bold"), cursor="hand2",
+            command=self._toggle_commands,
         )
-        cmd_header.pack(fill=tk.X)
+        self._toggle_btn.pack(side=tk.LEFT, padx=6, pady=4)
+
+        # Commands panel (collapsible)
+        self.commands_container = tk.Frame(parent, bg="#1e1e2e")
+        if self._commands_visible:
+            self.commands_container.pack(fill=tk.BOTH, expand=True)
 
         # Search bar
-        search_frame = ttk.Frame(cmd_frame)
+        search_frame = tk.Frame(self.commands_container, bg="#1e1e2e")
         search_frame.pack(fill=tk.X, padx=4, pady=4)
-        ttk.Label(search_frame, text="Поиск:").pack(side=tk.LEFT)
-        self.cmd_search = ttk.Entry(search_frame, width=20)
+        tk.Label(search_frame, text="Поиск:", bg="#1e1e2e", fg="#6c7086",
+                 font=("Consolas", 9)).pack(side=tk.LEFT)
+        self.cmd_search = tk.Entry(search_frame, bg="#313244", fg="#cdd6f4",
+                                   insertbackground="#cdd6f4", relief=tk.FLAT,
+                                   font=("Consolas", 9))
         self.cmd_search.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
         self.cmd_search.bind("<KeyRelease>", self._filter_commands)
 
         # Commands tree
-        cmd_tree_frame = ttk.Frame(cmd_frame)
+        cmd_tree_frame = tk.Frame(self.commands_container, bg="#1e1e2e")
         cmd_tree_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.cmd_tree = ttk.Treeview(
-            cmd_tree_frame, columns=("desc",), show="tree headings",
-            selectmode="browse",
-        )
+        self.cmd_tree = ttk.Treeview(cmd_tree_frame, columns=("desc",), show="tree headings",
+                                      selectmode="browse")
         self.cmd_tree.heading("#0", text="Команда")
         self.cmd_tree.heading("desc", text="Описание")
-        self.cmd_tree.column("#0", width=200, minwidth=120)
-        self.cmd_tree.column("desc", width=180, minwidth=100)
+        self.cmd_tree.column("#0", width=180, minwidth=100)
+        self.cmd_tree.column("desc", width=160, minwidth=80)
 
         cmd_scroll = ttk.Scrollbar(cmd_tree_frame, command=self.cmd_tree.yview)
         self.cmd_tree.configure(yscrollcommand=cmd_scroll.set)
         cmd_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.cmd_tree.pack(fill=tk.BOTH, expand=True)
-
         self.cmd_tree.bind("<Double-1>", self._send_command)
 
-        # Hint label
-        hint = tk.Label(
-            cmd_frame, text="Двойной клик = отправить в терминал",
-            bg="#1e1e2e", fg="#6c7086", font=("Consolas", 8),
-        )
-        hint.pack(fill=tk.X, pady=2)
+        tk.Label(self.commands_container, text="Двойной клик = отправить в терминал",
+                 bg="#1e1e2e", fg="#6c7086", font=("Consolas", 8)).pack(fill=tk.X, pady=2)
 
         self._populate_commands()
 
-        # ── Agent tab (under commands) ──
-        agent_frame = ttk.LabelFrame(cmd_frame, text="Агент-подсказчик", padding=6)
-        agent_frame.pack(fill=tk.X, padx=4, pady=(4, 2))
+        # ── Agent Panel ──
+        tk.Frame(parent, bg="#45475a", height=1).pack(fill=tk.X, padx=4, pady=2)
 
-        agent_input_frame = ttk.Frame(agent_frame)
-        agent_input_frame.pack(fill=tk.X)
-        self.agent_entry = ttk.Entry(agent_input_frame, width=22)
+        agent_header = tk.Frame(parent, bg="#181825")
+        agent_header.pack(fill=tk.X)
+
+        tk.Label(agent_header, text="AI Агент", bg="#181825", fg="#a6e3a1",
+                 font=("Consolas", 11, "bold")).pack(side=tk.LEFT, padx=6, pady=4)
+
+        # Provider indicator
+        provider = self.config.get("ai_provider", "local")
+        provider_names = {"local": "Локальный", "claude": "Claude", "deepseek": "DeepSeek"}
+        self._provider_label = tk.Label(
+            agent_header, text=f"[{provider_names.get(provider, provider)}]",
+            bg="#181825", fg="#6c7086", font=("Consolas", 8),
+        )
+        self._provider_label.pack(side=tk.LEFT, padx=2)
+
+        tk.Button(agent_header, text="⚙", bg="#181825", fg="#6c7086",
+                  activebackground="#181825", relief=tk.FLAT, font=("Consolas", 11),
+                  cursor="hand2", command=self._ai_settings).pack(side=tk.RIGHT, padx=6)
+
+        # Agent content
+        self.agent_frame = tk.Frame(parent, bg="#1e1e2e")
+        self.agent_frame.pack(fill=tk.BOTH, expand=not self._commands_visible, padx=4, pady=2)
+
+        # Input
+        agent_input = tk.Frame(self.agent_frame, bg="#1e1e2e")
+        agent_input.pack(fill=tk.X, pady=(0, 4))
+
+        self.agent_entry = tk.Entry(agent_input, bg="#313244", fg="#cdd6f4",
+                                     insertbackground="#cdd6f4", relief=tk.FLAT,
+                                     font=("Consolas", 10))
         self.agent_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
         self.agent_entry.insert(0, "как обновить ubuntu?")
-        ttk.Button(agent_input_frame, text="?", command=self._agent_ask, width=3).pack(side=tk.RIGHT)
         self.agent_entry.bind("<Return>", lambda e: self._agent_ask())
 
+        tk.Button(agent_input, text="Спросить", bg="#a6e3a1", fg="#1e1e2e",
+                  activebackground="#89b4fa", relief=tk.FLAT,
+                  font=("Consolas", 9, "bold"), padx=8, pady=2,
+                  command=self._agent_ask).pack(side=tk.RIGHT)
+
+        # Result area
         self.agent_result = tk.Text(
-            agent_frame, height=8, bg="#181825", fg="#cdd6f4",
+            self.agent_frame, bg="#181825", fg="#cdd6f4",
             font=("Consolas", 9), wrap=tk.WORD, borderwidth=0,
             insertbackground="#cdd6f4", highlightthickness=0,
         )
-        self.agent_result.pack(fill=tk.X, pady=(4, 0))
+        agent_scroll = ttk.Scrollbar(self.agent_frame, command=self.agent_result.yview)
+        self.agent_result.configure(yscrollcommand=agent_scroll.set)
+        agent_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.agent_result.pack(fill=tk.BOTH, expand=True)
+
         self.agent_result.tag_configure("cmd", foreground="#a6e3a1", font=("Consolas", 9, "bold"))
         self.agent_result.tag_configure("desc", foreground="#6c7086")
         self.agent_result.tag_configure("platform", foreground="#89b4fa")
         self.agent_result.tag_configure("hint", foreground="#f9e2af")
+        self.agent_result.tag_configure("error", foreground="#f38ba8")
+        self.agent_result.tag_configure("ai", foreground="#cba6f7")
+        self.agent_result.tag_configure("thinking", foreground="#f9e2af", font=("Consolas", 9, "italic"))
         self.agent_result.configure(state=tk.DISABLED)
         self.agent_result.bind("<Double-1>", self._agent_send_cmd)
 
-        # Welcome tab
-        welcome = ttk.Frame(self.notebook)
-        self.notebook.add(welcome, text="Добро пожаловать")
-        msg = ttk.Label(
-            welcome,
-            text=f"{APP_NAME} v{VERSION}\n\n"
-                 "• Двойной клик по сессии = подключение\n"
-                 "• Быстрое подключение внизу слева\n"
-                 "• Все сессии сохраняются автоматически\n"
-                 "• Ctrl+C/D/L работают в терминале\n"
-                 "• Панель команд справа — клик = отправка\n"
-                 "• Агент внизу справа — спроси что угодно",
-            font=("Consolas", 12),
-            justify=tk.CENTER,
-        )
-        msg.pack(expand=True)
+    def _toggle_commands(self):
+        self._commands_visible = not self._commands_visible
+        self.config.set("commands_visible", self._commands_visible)
 
-    # ── Drag & Drop ──
-
-    def _drag_start(self, event):
-        item = self.tree.identify_row(event.y)
-        if item and self.tree.parent(item):
-            self._drag_item = item
+        if self._commands_visible:
+            self.commands_container.pack(fill=tk.BOTH, expand=True,
+                                          before=self.commands_container.master.winfo_children()[-3])
+            self._toggle_btn.configure(text="Команды ▼")
+            self.agent_frame.pack_configure(expand=False)
         else:
-            self._drag_item = None
+            self.commands_container.pack_forget()
+            self._toggle_btn.configure(text="Команды ▶")
+            self.agent_frame.pack_configure(expand=True)
 
-    def _drag_motion(self, event):
-        if not self._drag_item:
-            return
-        target = self.tree.identify_row(event.y)
-        if target:
-            self.tree.selection_set(target)
+    # ── AI Agent ──────────────────────────────────────────────
 
-    def _drag_end(self, event):
-        if not self._drag_item:
-            return
-        target = self.tree.identify_row(event.y)
-        if not target or target == self._drag_item:
-            self._drag_item = None
-            return
-
-        src_iid = self._drag_item
-        src_tags = self.tree.item(src_iid, "tags")
-        if not src_tags or not src_tags[0].startswith("s_"):
-            self._drag_item = None
-            return
-        src_idx = int(src_tags[0].split("_")[1])
-
-        # Determine target group
-        target_tags = self.tree.item(target, "tags")
-        if target_tags and target_tags[0].startswith("g_"):
-            new_group = target_tags[0][2:]
-        elif target_tags and target_tags[0].startswith("s_"):
-            parent = self.tree.parent(target)
-            if parent:
-                ptags = self.tree.item(parent, "tags")
-                new_group = ptags[0][2:] if ptags and ptags[0].startswith("g_") else ""
-            else:
-                new_group = ""
-        else:
-            new_group = ""
-
-        if new_group == "__ungrouped__":
-            new_group = ""
-
-        self.store.move_to_group(src_idx, new_group)
-        self._refresh_session_list()
-        self._drag_item = None
-
-    # ── Context Menu ──
-
-    def _show_context_menu(self, event):
-        item = self.tree.identify_row(event.y)
-        if not item:
-            return
-        self.tree.selection_set(item)
-        self._ctx_menu.delete(0, tk.END)
-
-        tags = self.tree.item(item, "tags")
-        if tags and tags[0].startswith("s_"):
-            idx = int(tags[0].split("_")[1])
-            self._ctx_menu.add_command(label="Подключиться", command=lambda: self._connect_by_idx(idx))
-            self._ctx_menu.add_separator()
-
-            # Move to group submenu
-            move_menu = tk.Menu(self._ctx_menu, tearoff=0, bg="#313244", fg="#cdd6f4")
-            move_menu.add_command(label="Без группы", command=lambda: self._move_session(idx, ""))
-            for g in self.store.groups:
-                move_menu.add_command(label=g, command=lambda g=g: self._move_session(idx, g))
-            self._ctx_menu.add_cascade(label="Переместить в...", menu=move_menu)
-            self._ctx_menu.add_separator()
-            self._ctx_menu.add_command(label="Изменить", command=self._edit_session)
-            self._ctx_menu.add_command(label="Удалить", command=self._delete_session)
-
-        elif tags and tags[0].startswith("g_"):
-            gname = tags[0][2:]
-            if gname != "__ungrouped__":
-                self._ctx_menu.add_command(label="Переименовать", command=self._rename_group)
-                self._ctx_menu.add_command(label="Удалить группу", command=self._delete_group)
-
-        self._ctx_menu.tk_popup(event.x_root, event.y_root)
-
-    def _move_session(self, idx, group):
-        self.store.move_to_group(idx, group)
-        self._refresh_session_list()
-
-    def _connect_by_idx(self, idx):
-        s = self.store.sessions[idx]
-        pw = self.store.get_password(s)
-        self._open_terminal(s["host"], s["port"], s["user"], pw, s["name"])
-
-    # ── Agent ──
+    def _ai_settings(self):
+        dlg = AISettingsDialog(self, self.config.data)
+        if dlg.result:
+            for k, v in dlg.result.items():
+                self.config.set(k, v)
+            provider = self.config.get("ai_provider", "local")
+            provider_names = {"local": "Локальный", "claude": "Claude", "deepseek": "DeepSeek"}
+            self._provider_label.configure(text=f"[{provider_names.get(provider, provider)}]")
 
     def _agent_ask(self):
         query = self.agent_entry.get().strip()
         if not query:
             return
+
+        provider = self.config.get("ai_provider", "local")
+
+        if provider == "local":
+            self._agent_ask_local(query)
+        elif provider in ("claude", "deepseek"):
+            self._agent_ask_api(query, provider)
+
+    def _agent_ask_local(self, query):
         results = agent_search(query)
         self.agent_result.configure(state=tk.NORMAL)
         self.agent_result.delete("1.0", tk.END)
         if not results:
             self.agent_result.insert(tk.END, "Не нашёл команд. Попробуй другие слова:\n", "desc")
             self.agent_result.insert(tk.END, "обновить, диск, память, порт, пароль,\n", "hint")
-            self.agent_result.insert(tk.END, "docker, nginx, ssl, vpn, wifi, dhcp", "hint")
+            self.agent_result.insert(tk.END, "docker, nginx, ssl, vpn, wifi, dhcp\n\n", "hint")
+            self.agent_result.insert(tk.END, "Совет: ", "desc")
+            self.agent_result.insert(tk.END, "подключи Claude или DeepSeek API\n", "ai")
+            self.agent_result.insert(tk.END, "для умного ассистента (⚙ настройки)", "ai")
         else:
             self.agent_result.insert(tk.END, "Двойной клик по команде = отправить\n\n", "desc")
             for _, platform, cmd, desc in results:
-                tag = "linux" if platform == "linux" else "keenetic"
                 self.agent_result.insert(tk.END, f"[{platform}] ", "platform")
                 self.agent_result.insert(tk.END, f"{cmd}\n", "cmd")
                 self.agent_result.insert(tk.END, f"  {desc}\n", "desc")
         self.agent_result.configure(state=tk.DISABLED)
 
+    def _agent_ask_api(self, query, provider):
+        self.agent_result.configure(state=tk.NORMAL)
+        self.agent_result.delete("1.0", tk.END)
+        self.agent_result.insert(tk.END, "Думаю...\n", "thinking")
+        self.agent_result.configure(state=tk.DISABLED)
+
+        def _call():
+            try:
+                if provider == "claude":
+                    api_key = self.config.get("claude_api_key", "")
+                    if not api_key:
+                        return None, "API-ключ Claude не задан. Нажми ⚙"
+                    response = call_claude_api(api_key, query)
+                elif provider == "deepseek":
+                    api_key = self.config.get("deepseek_api_key", "")
+                    if not api_key:
+                        return None, "API-ключ DeepSeek не задан. Нажми ⚙"
+                    response = call_deepseek_api(api_key, query)
+                else:
+                    return None, "Неизвестный провайдер"
+                return response, None
+            except urllib.error.HTTPError as e:
+                body = e.read().decode("utf-8", errors="replace")[:200]
+                return None, f"HTTP {e.code}: {body}"
+            except Exception as e:
+                return None, str(e)
+
+        def _on_result(response, error):
+            self.agent_result.configure(state=tk.NORMAL)
+            self.agent_result.delete("1.0", tk.END)
+            if error:
+                self.agent_result.insert(tk.END, f"Ошибка: {error}\n", "error")
+            else:
+                self.agent_result.insert(tk.END, "Двойной клик по команде = отправить\n\n", "desc")
+                # Parse response for commands
+                lines = response.strip().split("\n")
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # Try to detect command lines: starts with [linux]/[keenetic] or contains command pattern
+                    if line.startswith("[linux]") or line.startswith("[keenetic]"):
+                        parts = line.split("] ", 1)
+                        platform = parts[0] + "]"
+                        rest = parts[1] if len(parts) > 1 else ""
+                        if " — " in rest:
+                            cmd, desc = rest.split(" — ", 1)
+                            self.agent_result.insert(tk.END, f"{platform} ", "platform")
+                            self.agent_result.insert(tk.END, f"{cmd.strip()}\n", "cmd")
+                            self.agent_result.insert(tk.END, f"  {desc.strip()}\n", "desc")
+                        else:
+                            self.agent_result.insert(tk.END, f"{platform} ", "platform")
+                            self.agent_result.insert(tk.END, f"{rest}\n", "cmd")
+                    elif line.startswith("`") or line.startswith("$") or line.startswith("sudo ") or line.startswith("show "):
+                        # Looks like a command
+                        cmd = line.strip("`").strip("$ ")
+                        self.agent_result.insert(tk.END, f"{cmd}\n", "cmd")
+                    elif " — " in line or " - " in line:
+                        sep = " — " if " — " in line else " - "
+                        cmd, desc = line.split(sep, 1)
+                        cmd = cmd.strip().strip("`").strip("$ ")
+                        if cmd:
+                            self.agent_result.insert(tk.END, f"{cmd}\n", "cmd")
+                            self.agent_result.insert(tk.END, f"  {desc.strip()}\n", "desc")
+                        else:
+                            self.agent_result.insert(tk.END, f"{line}\n", "ai")
+                    else:
+                        self.agent_result.insert(tk.END, f"{line}\n", "ai")
+            self.agent_result.configure(state=tk.DISABLED)
+
+        def _thread():
+            response, error = _call()
+            self.after(0, lambda: _on_result(response, error))
+
+        threading.Thread(target=_thread, daemon=True).start()
+
     def _agent_send_cmd(self, event):
         idx = self.agent_result.index(f"@{event.x},{event.y}")
         line = self.agent_result.get(f"{idx} linestart", f"{idx} lineend").strip()
+        # Skip description lines and headers
         if line.startswith("["):
             line = line.split("] ", 1)[-1] if "] " in line else line
-        if not line or line.startswith("Двойной") or line.startswith("Не нашёл"):
+        if not line or line.startswith("Двойной") or line.startswith("Не нашёл") or line.startswith("Думаю") or line.startswith("Ошибка") or line.startswith("Совет"):
             return
+        # Skip description lines (indented with 2 spaces)
+        raw = self.agent_result.get(f"{idx} linestart", f"{idx} lineend")
+        if raw.startswith("  "):
+            return
+
         current_tab = self.notebook.select()
         if not current_tab:
             return
@@ -1220,6 +1670,8 @@ class App(tk.Tk):
             widget._send(line + "\r")
         else:
             messagebox.showinfo("Нет терминала", "Сначала подключитесь к серверу")
+
+    # ── Commands Tree ─────────────────────────────────────────
 
     def _populate_commands(self, filter_text=""):
         self.cmd_tree.delete(*self.cmd_tree.get_children())
@@ -1263,124 +1715,17 @@ class App(tk.Tk):
         else:
             messagebox.showinfo("Нет терминала", "Сначала подключитесь к серверу")
 
-    def _refresh_session_list(self):
-        self.tree.delete(*self.tree.get_children())
+    # ── Session/Group CRUD ────────────────────────────────────
 
-        # Group sessions
-        grouped = {}
-        ungrouped = []
-        for i, s in enumerate(self.store.sessions):
-            g = s.get("group", "")
-            if g:
-                grouped.setdefault(g, []).append((i, s))
-            else:
-                ungrouped.append((i, s))
-
-        # Show groups from store order
-        for g in self.store.groups:
-            gid = self.tree.insert("", tk.END, text=f"  {g}", values=("", ""),
-                                    open=True, tags=(f"g_{g}",))
-            for i, s in grouped.get(g, []):
-                desc = s.get("description", "")
-                self.tree.insert(gid, tk.END, text=s["name"],
-                                  values=(desc, f"{s['host']}:{s['port']}"),
-                                  tags=(f"s_{i}",))
-
-        # Groups that exist in sessions but not in store.groups
-        for g, items in grouped.items():
-            if g not in self.store.groups:
-                self.store.add_group(g)
-                gid = self.tree.insert("", tk.END, text=f"  {g}", values=("", ""),
-                                        open=True, tags=(f"g_{g}",))
-                for i, s in items:
-                    desc = s.get("description", "")
-                    self.tree.insert(gid, tk.END, text=s["name"],
-                                      values=(desc, f"{s['host']}:{s['port']}"),
-                                      tags=(f"s_{i}",))
-
-        # Ungrouped sessions
-        if ungrouped:
-            uid = self.tree.insert("", tk.END, text="  Без группы", values=("", ""),
-                                    open=True, tags=("g___ungrouped__",))
-            for i, s in ungrouped:
-                desc = s.get("description", "")
-                self.tree.insert(uid, tk.END, text=s["name"],
-                                  values=(desc, f"{s['host']}:{s['port']}"),
-                                  tags=(f"s_{i}",))
-
-    def _get_selected_session_index(self):
-        sel = self.tree.selection()
-        if not sel:
-            return None
-        tags = self.tree.item(sel[0], "tags")
-        if tags and tags[0].startswith("s_"):
-            return int(tags[0].split("_")[1])
-        return None
-
-    def _get_selected_group_name(self):
-        sel = self.tree.selection()
-        if not sel:
-            return None
-        tags = self.tree.item(sel[0], "tags")
-        if tags and tags[0].startswith("g_"):
-            name = tags[0][2:]
-            return name if name != "__ungrouped__" else None
-        return None
-
-    def _on_tree_double_click(self, event):
-        idx = self._get_selected_session_index()
-        if idx is not None:
-            self._connect_by_idx(idx)
-
-    # ── Group CRUD ──
-
-    def _new_group(self):
-        from tkinter import simpledialog
-        name = simpledialog.askstring("Новая группа", "Название группы:", parent=self)
-        if name and name.strip():
-            self.store.add_group(name.strip())
-            self._refresh_session_list()
-
-    def _rename_group(self):
-        old = self._get_selected_group_name()
-        if not old:
-            sel = self.tree.selection()
-            if sel:
-                tags = self.tree.item(sel[0], "tags")
-                if tags and tags[0].startswith("s_"):
-                    parent = self.tree.parent(sel[0])
-                    if parent:
-                        ptags = self.tree.item(parent, "tags")
-                        if ptags and ptags[0].startswith("g_") and ptags[0][2:] != "__ungrouped__":
-                            old = ptags[0][2:]
-            if not old:
-                return
-        from tkinter import simpledialog
-        new = simpledialog.askstring("Переименовать", f"Новое имя для «{old}»:", parent=self,
-                                      initialvalue=old)
-        if new and new.strip() and new.strip() != old:
-            self.store.rename_group(old, new.strip())
-            self._refresh_session_list()
-
-    def _delete_group(self):
-        name = self._get_selected_group_name()
-        if not name:
-            return
-        if messagebox.askyesno("Удалить группу?",
-                                f"Удалить группу «{name}»?\nСессии переместятся в «Без группы»."):
-            self.store.remove_group(name)
-            self._refresh_session_list()
-
-    # ── Session CRUD ──
+    def _connect_by_idx(self, idx):
+        s = self.store.sessions[idx]
+        pw = self.store.get_password(s)
+        self._open_terminal(s["host"], s["port"], s["user"], pw, s["name"])
 
     def _new_session(self):
-        # Pre-select group from tree selection
-        pregroup = self._get_selected_group_name() or ""
-        if not pregroup:
-            idx = self._get_selected_session_index()
-            if idx is not None:
-                pregroup = self.store.sessions[idx].get("group", "")
-
+        pregroup = ""
+        if self._selected_card_idx is not None:
+            pregroup = self.store.sessions[self._selected_card_idx].get("group", "")
         session_defaults = {"group": pregroup} if pregroup else None
         dlg = SessionDialog(self, "Новая сессия", session=session_defaults,
                              groups=self.store.groups)
@@ -1388,12 +1733,13 @@ class App(tk.Tk):
             r = dlg.result
             self.store.add(r["host"], r["port"], r["user"], r["password"],
                            r["name"], r.get("group", ""))
-            self._refresh_session_list()
+            self._refresh_cards()
 
     def _edit_session(self):
-        idx = self._get_selected_session_index()
-        if idx is None:
-            return
+        if self._selected_card_idx is not None:
+            self._edit_session_by_idx(self._selected_card_idx)
+
+    def _edit_session_by_idx(self, idx):
         s = self.store.sessions[idx].copy()
         s["password"] = ""
         dlg = SessionDialog(self, "Изменить сессию", s, groups=self.store.groups)
@@ -1405,16 +1751,37 @@ class App(tk.Tk):
             if r["password"]:
                 update["password"] = r["password"]
             self.store.update(idx, **update)
-            self._refresh_session_list()
+            self._refresh_cards()
 
     def _delete_session(self):
-        idx = self._get_selected_session_index()
-        if idx is None:
-            return
+        if self._selected_card_idx is not None:
+            self._delete_session_by_idx(self._selected_card_idx)
+
+    def _delete_session_by_idx(self, idx):
         s = self.store.sessions[idx]
         if messagebox.askyesno("Удалить?", f"Удалить сессию «{s['name']}»?"):
             self.store.remove(idx)
-            self._refresh_session_list()
+            self._selected_card_idx = None
+            self._refresh_cards()
+
+    def _new_group(self):
+        name = simpledialog.askstring("Новая группа", "Название группы:", parent=self)
+        if name and name.strip():
+            self.store.add_group(name.strip())
+            self._refresh_cards()
+
+    def _rename_group_by_name(self, old):
+        new = simpledialog.askstring("Переименовать", f"Новое имя для «{old}»:",
+                                      parent=self, initialvalue=old)
+        if new and new.strip() and new.strip() != old:
+            self.store.rename_group(old, new.strip())
+            self._refresh_cards()
+
+    def _delete_group_by_name(self, name):
+        if messagebox.askyesno("Удалить группу?",
+                                f"Удалить группу «{name}»?\nСессии переместятся в «Без группы»."):
+            self.store.remove_group(name)
+            self._refresh_cards()
 
     def _quick_connect(self):
         host = self.q_host.get().strip()
@@ -1426,27 +1793,25 @@ class App(tk.Tk):
             port = 22
         user = self.q_user.get().strip() or "root"
         pw = self.q_pass.get()
-        group = self._get_selected_group_name() or ""
 
-        self.store.add(host, port, user, pw, group=group)
-        self._refresh_session_list()
+        self.store.add(host, port, user, pw)
+        self._refresh_cards()
         self._open_terminal(host, port, user, pw)
         self.q_pass.delete(0, tk.END)
 
     def _open_terminal(self, host, port, user, password, name=None):
         tab_name = name or f"{user}@{host}"
 
-        def on_close():
-            pass
-
-        term = TerminalWidget(self.notebook, on_close=on_close)
+        term = TerminalWidget(self.notebook, on_close=lambda: None)
         self.notebook.add(term, text=f"● {tab_name}")
         self.notebook.select(term)
         term.connect(host, port, user, password)
 
-        close_btn_frame = ttk.Frame(term)
-        close_btn = ttk.Button(
+        close_btn_frame = tk.Frame(term, bg="#1e1e2e")
+        close_btn = tk.Button(
             close_btn_frame, text="✕ Закрыть вкладку",
+            bg="#45475a", fg="#cdd6f4", activebackground="#585b70",
+            relief=tk.FLAT, font=("Consolas", 9), padx=6, pady=2,
             command=lambda: self._close_tab(term),
         )
         close_btn.pack(side=tk.RIGHT, padx=4, pady=2)

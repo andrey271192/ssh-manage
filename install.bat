@@ -1,5 +1,5 @@
 @echo off
-echo === KU SSH Manager — Install and Run ===
+echo === PCA SSH v2.0 — Install and Run ===
 
 where python >nul 2>&1
 if errorlevel 1 (
@@ -13,5 +13,5 @@ if errorlevel 1 (
 echo Installing dependencies...
 pip install paramiko
 
-echo Starting SSH Manager...
+echo Starting PCA SSH...
 python ssh_manager.py
