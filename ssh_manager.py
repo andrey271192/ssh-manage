@@ -16,6 +16,7 @@ import base64
 import socket
 import urllib.request
 import urllib.error
+import ssl
 from datetime import datetime
 from pathlib import Path
 
@@ -1017,6 +1018,22 @@ class AISettingsDialog(tk.Toplevel):
 
 # ── AI API Caller ─────────────────────────────────────────────
 
+def _ssl_context():
+    """Create SSL context that works on Windows without certifi."""
+    try:
+        ctx = ssl.create_default_context()
+        # Test if default certs work
+        ctx.check_hostname = True
+        return ctx
+    except Exception:
+        pass
+    # Fallback: unverified context (Windows without certs)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
 def call_claude_api(api_key, query):
     url = "https://api.anthropic.com/v1/messages"
     payload = json.dumps({
@@ -1031,7 +1048,8 @@ def call_claude_api(api_key, query):
     req.add_header("anthropic-version", "2023-06-01")
     req.add_header("content-type", "application/json")
 
-    resp = urllib.request.urlopen(req, timeout=30)
+    ctx = _ssl_context()
+    resp = urllib.request.urlopen(req, timeout=30, context=ctx)
     data = json.loads(resp.read().decode("utf-8"))
     text = ""
     for block in data.get("content", []):
@@ -1055,7 +1073,8 @@ def call_deepseek_api(api_key, query):
     req.add_header("Authorization", f"Bearer {api_key}")
     req.add_header("Content-Type", "application/json")
 
-    resp = urllib.request.urlopen(req, timeout=30)
+    ctx = _ssl_context()
+    resp = urllib.request.urlopen(req, timeout=30, context=ctx)
     data = json.loads(resp.read().decode("utf-8"))
     choices = data.get("choices", [])
     if choices:
