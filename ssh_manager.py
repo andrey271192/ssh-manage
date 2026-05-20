@@ -1435,8 +1435,17 @@ class App(tk.Tk):
                     w.configure(bg=bg)
 
         def _click(e):
+            old_idx = self._selected_card_idx
             self._selected_card_idx = index
-            self._refresh_cards()
+            # Visual update without destroying widgets
+            if old_idx != index:
+                card.configure(bg="#3b3b5c", highlightbackground=accent_color)
+                for w in card.winfo_children():
+                    if isinstance(w, (tk.Label, tk.Canvas)):
+                        try:
+                            w.configure(bg="#3b3b5c")
+                        except tk.TclError:
+                            pass
 
         def _double_click(e):
             self._connect_by_idx(index)
