@@ -492,10 +492,10 @@ def agent_search(query):
 
 
 def setup_entry_clipboard(entry):
-    """Add right-click context menu to tk.Entry. Keyboard shortcuts (Cmd+V/C/X)
-    are handled by tkinter's built-in Entry bindings — do NOT override them."""
+    """Fix clipboard on macOS (Tk 8.6 maps <<Paste>> to Mod1 not Command)
+    and add right-click context menu."""
 
-    def _paste():
+    def _paste(e=None):
         try:
             text = entry.clipboard_get()
             if entry.selection_present():
@@ -503,20 +503,24 @@ def setup_entry_clipboard(entry):
             entry.insert(tk.INSERT, text)
         except tk.TclError:
             pass
+        return "break"
 
-    def _copy():
+    def _copy(e=None):
         if entry.selection_present():
             entry.clipboard_clear()
             entry.clipboard_append(entry.selection_get())
+        return "break"
 
-    def _cut():
+    def _cut(e=None):
+        _copy()
         if entry.selection_present():
-            _copy()
             entry.delete(tk.SEL_FIRST, tk.SEL_LAST)
+        return "break"
 
-    def _select_all():
+    def _select_all(e=None):
         entry.select_range(0, tk.END)
         entry.icursor(tk.END)
+        return "break"
 
     def _context_menu(event):
         menu = tk.Menu(entry, tearoff=0, bg="#313244", fg="#cdd6f4",
@@ -528,11 +532,18 @@ def setup_entry_clipboard(entry):
         menu.add_command(label="Выделить всё", command=_select_all)
         menu.tk_popup(event.x_root, event.y_root)
 
-    # Right-click context menu only — keyboard handled by tkinter defaults
-    entry.bind("<Button-3>", _context_menu)
     if sys.platform == "darwin":
+        # macOS Tk 8.6 bug: <<Paste>> bound to Mod1 (Option) not Command
+        # Manually bind Command+key for clipboard operations
+        entry.bind("<Command-v>", _paste)
+        entry.bind("<Command-c>", _copy)
+        entry.bind("<Command-x>", _cut)
+        entry.bind("<Command-a>", _select_all)
+        # Right-click
         entry.bind("<Button-2>", _context_menu)
         entry.bind("<Control-Button-1>", _context_menu)
+
+    entry.bind("<Button-3>", _context_menu)
 
 
 def app_dir():
