@@ -492,9 +492,10 @@ def agent_search(query):
 
 
 def setup_entry_clipboard(entry):
-    """Add clipboard support (Ctrl/Cmd+C/V/X/A) and right-click menu to tk.Entry."""
+    """Add right-click context menu to tk.Entry. Keyboard shortcuts (Cmd+V/C/X)
+    are handled by tkinter's built-in Entry bindings — do NOT override them."""
 
-    def _paste(e=None):
+    def _paste():
         try:
             text = entry.clipboard_get()
             if entry.selection_present():
@@ -502,24 +503,20 @@ def setup_entry_clipboard(entry):
             entry.insert(tk.INSERT, text)
         except tk.TclError:
             pass
-        return "break"
 
-    def _copy(e=None):
+    def _copy():
         if entry.selection_present():
             entry.clipboard_clear()
             entry.clipboard_append(entry.selection_get())
-        return "break"
 
-    def _cut(e=None):
+    def _cut():
         if entry.selection_present():
             _copy()
             entry.delete(tk.SEL_FIRST, tk.SEL_LAST)
-        return "break"
 
-    def _select_all(e=None):
+    def _select_all():
         entry.select_range(0, tk.END)
         entry.icursor(tk.END)
-        return "break"
 
     def _context_menu(event):
         menu = tk.Menu(entry, tearoff=0, bg="#313244", fg="#cdd6f4",
@@ -531,17 +528,7 @@ def setup_entry_clipboard(entry):
         menu.add_command(label="Выделить всё", command=_select_all)
         menu.tk_popup(event.x_root, event.y_root)
 
-    # Bind all possible modifier combos for macOS and Windows
-    for mod in ("Command", "Control", "Meta"):
-        for key, func in [("v", _paste), ("V", _paste),
-                          ("c", _copy), ("C", _copy),
-                          ("x", _cut), ("X", _cut),
-                          ("a", _select_all), ("A", _select_all)]:
-            try:
-                entry.bind(f"<{mod}-{key}>", func)
-            except tk.TclError:
-                pass
-
+    # Right-click context menu only — keyboard handled by tkinter defaults
     entry.bind("<Button-3>", _context_menu)
     if sys.platform == "darwin":
         entry.bind("<Button-2>", _context_menu)
