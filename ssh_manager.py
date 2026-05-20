@@ -761,10 +761,14 @@ class TerminalWidget(tk.Frame):
         self.text.bind("<Control-d>", lambda e: self._send("\x04"))
         self.text.bind("<Control-l>", lambda e: self._send("\x0c"))
         self.text.bind("<Control-z>", lambda e: self._send("\x1a"))
-        # macOS: Command+V paste into terminal, Command+C copy selection
+        # Paste/Copy in terminal: send clipboard to SSH / copy selection
         if sys.platform == "darwin":
             self.text.bind("<Command-v>", self._term_paste)
             self.text.bind("<Command-c>", self._term_copy)
+        else:
+            # Windows/Linux: Ctrl+V paste, Ctrl+Shift+C copy
+            self.text.bind("<Control-v>", self._term_paste)
+            self.text.bind("<Control-Shift-C>", self._term_copy)
 
         self.text.tag_configure("error", foreground="#f38ba8")
         self.text.tag_configure("info", foreground="#89b4fa")
@@ -805,6 +809,11 @@ class TerminalWidget(tk.Frame):
                     break
                 text = data.decode("utf-8", errors="replace")
                 clean = strip_ansi(text)
+                # Remove control chars except \n \t \x08 \x7f (handled by _write)
+                clean = "".join(
+                    ch for ch in clean
+                    if ch in "\n\t\x08\x7f" or ord(ch) >= 32
+                )
                 self._write(clean)
             except socket.timeout:
                 continue
