@@ -820,8 +820,35 @@ class TerminalWidget(tk.Frame):
             self.text.configure(state=tk.NORMAL)
             if tag:
                 self.text.insert(tk.END, text, tag)
-            else:
+            elif "\x08" not in text and "\x7f" not in text and "\r" not in text:
+                # Fast path: no control chars
                 self.text.insert(tk.END, text)
+            else:
+                # Slow path: handle backspace/DEL/CR char by char
+                buf = []
+                for ch in text:
+                    if ch == "\x08" or ch == "\x7f":
+                        # Flush buffer first
+                        if buf:
+                            self.text.insert(tk.END, "".join(buf))
+                            buf.clear()
+                        # Delete char before cursor
+                        pos = self.text.index(tk.END + "-2c")
+                        if self.text.compare(pos, ">", "1.0"):
+                            self.text.delete(pos)
+                    elif ch == "\r":
+                        if buf:
+                            self.text.insert(tk.END, "".join(buf))
+                            buf.clear()
+                        # CR: delete current line content for overwrite
+                        line_start = self.text.index(tk.END + "-1c linestart")
+                        line_end = self.text.index(tk.END + "-1c")
+                        if self.text.compare(line_start, "<", line_end):
+                            self.text.delete(line_start, line_end)
+                    else:
+                        buf.append(ch)
+                if buf:
+                    self.text.insert(tk.END, "".join(buf))
             self.text.see(tk.END)
         self.after(0, _do)
 
