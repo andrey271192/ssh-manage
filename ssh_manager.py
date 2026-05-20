@@ -493,7 +493,6 @@ def agent_search(query):
 
 def setup_entry_clipboard(entry):
     """Add clipboard support (Ctrl/Cmd+C/V/X/A) and right-click menu to tk.Entry."""
-    mod = "Command" if sys.platform == "darwin" else "Control"
 
     def _paste(e=None):
         try:
@@ -532,14 +531,17 @@ def setup_entry_clipboard(entry):
         menu.add_command(label="Выделить всё", command=_select_all)
         menu.tk_popup(event.x_root, event.y_root)
 
-    entry.bind(f"<{mod}-v>", _paste)
-    entry.bind(f"<{mod}-V>", _paste)
-    entry.bind(f"<{mod}-c>", _copy)
-    entry.bind(f"<{mod}-C>", _copy)
-    entry.bind(f"<{mod}-x>", _cut)
-    entry.bind(f"<{mod}-X>", _cut)
-    entry.bind(f"<{mod}-a>", _select_all)
-    entry.bind(f"<{mod}-A>", _select_all)
+    # Bind all possible modifier combos for macOS and Windows
+    for mod in ("Command", "Control", "Meta"):
+        for key, func in [("v", _paste), ("V", _paste),
+                          ("c", _copy), ("C", _copy),
+                          ("x", _cut), ("X", _cut),
+                          ("a", _select_all), ("A", _select_all)]:
+            try:
+                entry.bind(f"<{mod}-{key}>", func)
+            except tk.TclError:
+                pass
+
     entry.bind("<Button-3>", _context_menu)
     if sys.platform == "darwin":
         entry.bind("<Button-2>", _context_menu)
@@ -1019,19 +1021,13 @@ class AISettingsDialog(tk.Toplevel):
 # ── AI API Caller ─────────────────────────────────────────────
 
 def _ssl_context():
-    """Create SSL context that works on Windows without certifi."""
-    try:
+    """Create SSL context — skip verify on Windows/frozen (often missing certs)."""
+    if sys.platform == "win32" or getattr(sys, "frozen", False):
         ctx = ssl.create_default_context()
-        # Test if default certs work
-        ctx.check_hostname = True
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
         return ctx
-    except Exception:
-        pass
-    # Fallback: unverified context (Windows without certs)
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
+    return None  # use default on macOS/Linux
 
 
 def call_claude_api(api_key, query):
