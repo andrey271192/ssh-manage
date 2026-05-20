@@ -1,0 +1,27 @@
+=====================================
+  PCA SSH v2.0 — Установка на Windows
+=====================================
+
+СПОСОБ 1 — Одна команда (рекомендуется)
+Скопируй и вставь в PowerShell:
+
+irm https://raw.githubusercontent.com/andrey271192/ssh-manage/main/full_install.ps1 -OutFile $env:TEMP\pca_install.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\pca_install.ps1
+
+Что произойдёт:
+- Скачает установщик с GitHub
+- Установит Python (если нет)
+- Соберёт PCA_SSH.exe с иконкой
+- Положит PCA_SSH.exe на Рабочий стол
+
+СПОСОБ 2 — Скачать и запустить
+1. Скачай: https://github.com/andrey271192/ssh-manage/archive/main.zip
+2. Распакуй в любую папку
+3. Открой PowerShell в этой папке
+4. Запусти: powershell -ExecutionPolicy Bypass -File full_install.ps1
+
+СПОСОБ 3 — Без сборки (Python)
+1. Установи Python: https://python.org/downloads/
+2. Скачай репозиторий
+3. Открой cmd/PowerShell в папке
+4. pip install paramiko
+5. python ssh_manager.py
