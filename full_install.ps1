@@ -1,8 +1,8 @@
 Write-Host ""
-Write-Host "  ╔══════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "  ║   PCA SSH v2.0                       ║" -ForegroundColor Cyan
-Write-Host "  ║   Private Control Administration     ║" -ForegroundColor Cyan
-Write-Host "  ╚══════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "  ======================================" -ForegroundColor Cyan
+Write-Host "    PCA SSH v2.0" -ForegroundColor Cyan
+Write-Host "    Private Control Administration" -ForegroundColor Cyan
+Write-Host "  ======================================" -ForegroundColor Cyan
 Write-Host ""
 
 $REPO_RAW = "https://raw.githubusercontent.com/andrey271192/ssh-manage/main"
@@ -75,7 +75,46 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $scriptDir) { $scriptDir = Get-Location }
 
 # Ensure TLS 1.2 for GitHub downloads
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+
+function Download-File($url, $dest) {
+    # Method 1: curl.exe (Windows 10+ built-in)
+    $curlExe = Join-Path $env:SystemRoot "System32\curl.exe"
+    if (Test-Path $curlExe) {
+        Write-Host "    method: curl.exe" -ForegroundColor DarkGray
+        & $curlExe -sL -o $dest $url 2>$null
+        if ((Test-Path $dest) -and (Get-Item $dest).Length -gt 100) { return $true }
+    }
+
+    # Method 2: Invoke-WebRequest
+    try {
+        Write-Host "    method: Invoke-WebRequest" -ForegroundColor DarkGray
+        Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -ErrorAction Stop
+        if ((Test-Path $dest) -and (Get-Item $dest).Length -gt 100) { return $true }
+    } catch {
+        Write-Host "    IWR error: $($_.Exception.Message)" -ForegroundColor DarkGray
+    }
+
+    # Method 3: System.Net.WebClient
+    try {
+        Write-Host "    method: WebClient" -ForegroundColor DarkGray
+        $wc = New-Object System.Net.WebClient
+        $wc.Headers.Add("User-Agent", "PCA-SSH-Installer")
+        $wc.DownloadFile($url, $dest)
+        if ((Test-Path $dest) -and (Get-Item $dest).Length -gt 100) { return $true }
+    } catch {
+        Write-Host "    WebClient error: $($_.Exception.Message)" -ForegroundColor DarkGray
+    }
+
+    # Method 4: certutil
+    try {
+        Write-Host "    method: certutil" -ForegroundColor DarkGray
+        certutil -urlcache -split -f $url $dest 2>$null | Out-Null
+        if ((Test-Path $dest) -and (Get-Item $dest).Length -gt 100) { return $true }
+    } catch {}
+
+    return $false
+}
 
 $filesToGet = @("ssh_manager.py", "gen_icon.py")
 foreach ($f in $filesToGet) {
@@ -85,22 +124,20 @@ foreach ($f in $filesToGet) {
         Copy-Item $localFile $destFile
         Write-Host "[OK] $f (local)" -ForegroundColor Green
     } else {
-        Write-Host "[*] Downloading $f from GitHub..." -ForegroundColor Yellow
-        try {
-            $url = "$REPO_RAW/$f"
-            Write-Host "    URL: $url" -ForegroundColor DarkGray
-            $wc = New-Object System.Net.WebClient
-            $wc.Headers.Add("User-Agent", "PCA-SSH-Installer")
-            $wc.DownloadFile($url, $destFile)
-            if (Test-Path $destFile) {
-                $sz = (Get-Item $destFile).Length
-                Write-Host "[OK] $f ($sz bytes)" -ForegroundColor Green
-            } else {
-                throw "File not saved"
-            }
-        } catch {
-            Write-Host "[FAIL] Cannot download $f : $_" -ForegroundColor Red
-            Write-Host "Try manual download: https://github.com/andrey271192/ssh-manage" -ForegroundColor Yellow
+        $url = "$REPO_RAW/$f"
+        Write-Host "[*] Downloading $f ..." -ForegroundColor Yellow
+        Write-Host "    URL: $url" -ForegroundColor DarkGray
+        $ok = Download-File $url $destFile
+        if ($ok -and (Test-Path $destFile)) {
+            $sz = (Get-Item $destFile).Length
+            Write-Host "[OK] $f ($sz bytes)" -ForegroundColor Green
+        } else {
+            Write-Host "[FAIL] Cannot download $f" -ForegroundColor Red
+            Write-Host ""
+            Write-Host "Manual install:" -ForegroundColor Yellow
+            Write-Host "1. Download: https://github.com/andrey271192/ssh-manage/archive/main.zip" -ForegroundColor Yellow
+            Write-Host "2. Extract to any folder" -ForegroundColor Yellow
+            Write-Host "3. Run: powershell -ExecutionPolicy Bypass -File full_install.ps1" -ForegroundColor Yellow
             Read-Host "Press Enter"
             exit 1
         }
