@@ -5,7 +5,7 @@
 СПОСОБ 1 — Одна команда (рекомендуется)
 Скопируй и вставь в PowerShell:
 
-irm https://raw.githubusercontent.com/andrey271192/ssh-manage/main/full_install.ps1 -OutFile $env:TEMP\pca_install.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\pca_install.ps1
+[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $wc=New-Object Net.WebClient; $wc.Headers.Add('User-Agent','PCA'); $wc.DownloadFile('https://raw.githubusercontent.com/andrey271192/ssh-manage/main/full_install.ps1',"$env:TEMP\pca_install.ps1"); powershell -ExecutionPolicy Bypass -File $env:TEMP\pca_install.ps1
 
 Что произойдёт:
 - Скачает установщик с GitHub

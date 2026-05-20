@@ -74,6 +74,9 @@ New-Item -ItemType Directory -Path $localDir | Out-Null
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $scriptDir) { $scriptDir = Get-Location }
 
+# Ensure TLS 1.2 for GitHub downloads
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 $filesToGet = @("ssh_manager.py", "gen_icon.py")
 foreach ($f in $filesToGet) {
     $localFile = Join-Path $scriptDir $f
@@ -84,10 +87,20 @@ foreach ($f in $filesToGet) {
     } else {
         Write-Host "[*] Downloading $f from GitHub..." -ForegroundColor Yellow
         try {
-            Invoke-WebRequest -Uri "$REPO_RAW/$f" -OutFile $destFile -UseBasicParsing
-            Write-Host "[OK] $f (downloaded)" -ForegroundColor Green
+            $url = "$REPO_RAW/$f"
+            Write-Host "    URL: $url" -ForegroundColor DarkGray
+            $wc = New-Object System.Net.WebClient
+            $wc.Headers.Add("User-Agent", "PCA-SSH-Installer")
+            $wc.DownloadFile($url, $destFile)
+            if (Test-Path $destFile) {
+                $sz = (Get-Item $destFile).Length
+                Write-Host "[OK] $f ($sz bytes)" -ForegroundColor Green
+            } else {
+                throw "File not saved"
+            }
         } catch {
-            Write-Host "[FAIL] Cannot download $f" -ForegroundColor Red
+            Write-Host "[FAIL] Cannot download $f : $_" -ForegroundColor Red
+            Write-Host "Try manual download: https://github.com/andrey271192/ssh-manage" -ForegroundColor Yellow
             Read-Host "Press Enter"
             exit 1
         }
