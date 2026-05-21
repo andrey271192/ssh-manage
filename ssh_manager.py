@@ -556,6 +556,23 @@ def setup_entry_clipboard(entry):
         # Right-click
         entry.bind("<Button-2>", _context_menu)
         entry.bind("<Control-Button-1>", _context_menu)
+
+        # Catch-all: in frozen .app, Command may map to unknown modifier bit.
+        # Named bindings (<Command-v> etc.) won't match → add <Key> fallback.
+        def _mac_key_fallback(event):
+            if event.state & 4:  # Ctrl — not Command
+                return
+            modifier_mask = event.state & ~0x07  # clear Shift, CapsLock, Ctrl
+            if modifier_mask:
+                if event.keysym == "v":
+                    return _paste(event)
+                if event.keysym == "c":
+                    return _copy(event)
+                if event.keysym == "x":
+                    return _cut(event)
+                if event.keysym == "a":
+                    return _select_all(event)
+        entry.bind("<Key>", _mac_key_fallback)
     else:
         # Windows/Linux: Ctrl+V
         entry.bind("<Control-v>", _paste)
@@ -918,12 +935,20 @@ class TerminalWidget(tk.Frame):
         return "break"
 
     def _on_key(self, event):
-        if event.state & 4:  # Ctrl
+        if event.state & 4:  # Ctrl — explicit Ctrl+C/D/L/Z bindings handle this
             return
-        if event.state & 8:  # Mod1 / Command on macOS — let bindings handle it
-            return
-        if sys.platform == "darwin" and (event.state & 0x10):  # Mod2 — Command on some Tk builds
-            return
+        # Any non-trivial modifier? (clear Shift=1, CapsLock=2, Ctrl=4)
+        modifier_mask = event.state & ~0x07
+        if modifier_mask:
+            # On macOS frozen .app, Command may map to ANY modifier bit.
+            # Named bindings (<Command-v> etc.) might not match.
+            # Catch-all: if any modifier + v/c → paste/copy.
+            if sys.platform == "darwin":
+                if event.keysym == "v":
+                    return self._term_paste()
+                if event.keysym == "c":
+                    return self._term_copy()
+            return  # Other modifier combos — let bindings handle
         if event.char and ord(event.char) >= 32:
             self._send(event.char)
             return "break"
