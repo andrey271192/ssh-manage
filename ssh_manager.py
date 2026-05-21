@@ -493,8 +493,7 @@ def agent_search(query):
 
 
 def setup_entry_clipboard(entry):
-    """Fix clipboard on macOS (Tk 8.6 maps <<Paste>> to Mod1 not Command)
-    and add right-click context menu."""
+    """Fix clipboard on all platforms. Covers every known Tk modifier mapping."""
 
     def _paste(e=None):
         try:
@@ -526,23 +525,43 @@ def setup_entry_clipboard(entry):
     def _context_menu(event):
         menu = tk.Menu(entry, tearoff=0, bg="#313244", fg="#cdd6f4",
                        activebackground="#45475a")
-        menu.add_command(label="Вырезать", command=_cut)
-        menu.add_command(label="Копировать", command=_copy)
-        menu.add_command(label="Вставить", command=_paste)
+        menu.add_command(label="Cut", command=_cut)
+        menu.add_command(label="Copy", command=_copy)
+        menu.add_command(label="Paste", command=_paste)
         menu.add_separator()
-        menu.add_command(label="Выделить всё", command=_select_all)
+        menu.add_command(label="Select All", command=_select_all)
         menu.tk_popup(event.x_root, event.y_root)
 
+    # Bind virtual events (works on all platforms)
+    entry.bind("<<Paste>>", _paste)
+    entry.bind("<<Copy>>", _copy)
+    entry.bind("<<Cut>>", _cut)
+    entry.bind("<<SelectAll>>", _select_all)
+
     if sys.platform == "darwin":
-        # macOS Tk 8.6 bug: <<Paste>> bound to Mod1 (Option) not Command
-        # Manually bind Command+key for clipboard operations
-        entry.bind("<Command-v>", _paste)
-        entry.bind("<Command-c>", _copy)
-        entry.bind("<Command-x>", _cut)
-        entry.bind("<Command-a>", _select_all)
+        # macOS: physical Command key may map to Command, Mod1, Mod2, or Meta
+        # depending on Tk version and frozen/unfrozen state.
+        # Bind ALL possible modifiers to guarantee it works.
+        for mod in ("Command", "Mod1", "Meta", "Mod2"):
+            entry.bind(f"<{mod}-v>", _paste)
+            entry.bind(f"<{mod}-c>", _copy)
+            entry.bind(f"<{mod}-x>", _cut)
+            entry.bind(f"<{mod}-a>", _select_all)
+        # Also register Command-v as trigger for <<Paste>> virtual event
+        for seq in ("<Command-v>", "<Mod1-v>", "<Meta-v>", "<Mod2-v>"):
+            try:
+                entry.event_add("<<Paste>>", seq)
+            except tk.TclError:
+                pass
         # Right-click
         entry.bind("<Button-2>", _context_menu)
         entry.bind("<Control-Button-1>", _context_menu)
+    else:
+        # Windows/Linux: Ctrl+V
+        entry.bind("<Control-v>", _paste)
+        entry.bind("<Control-c>", _copy)
+        entry.bind("<Control-x>", _cut)
+        entry.bind("<Control-a>", _select_all)
 
     entry.bind("<Button-3>", _context_menu)
 
@@ -763,9 +782,25 @@ class TerminalWidget(tk.Frame):
         self.text.bind("<Control-l>", lambda e: self._send("\x0c"))
         self.text.bind("<Control-z>", lambda e: self._send("\x1a"))
         # Paste/Copy in terminal: send clipboard to SSH / copy selection
+        # Bind virtual events first
+        self.text.bind("<<Paste>>", self._term_paste)
+        self.text.bind("<<Copy>>", self._term_copy)
         if sys.platform == "darwin":
-            self.text.bind("<Command-v>", self._term_paste)
-            self.text.bind("<Command-c>", self._term_copy)
+            # Nuclear: bind ALL possible macOS modifier mappings
+            for mod in ("Command", "Mod1", "Meta", "Mod2"):
+                self.text.bind(f"<{mod}-v>", self._term_paste)
+                self.text.bind(f"<{mod}-c>", self._term_copy)
+            # Also register as virtual event triggers
+            for seq in ("<Command-v>", "<Mod1-v>", "<Meta-v>", "<Mod2-v>"):
+                try:
+                    self.text.event_add("<<Paste>>", seq)
+                except tk.TclError:
+                    pass
+            for seq in ("<Command-c>", "<Mod1-c>", "<Meta-c>", "<Mod2-c>"):
+                try:
+                    self.text.event_add("<<Copy>>", seq)
+                except tk.TclError:
+                    pass
         else:
             # Windows/Linux: Ctrl+V paste, Ctrl+Shift+C copy
             self.text.bind("<Control-v>", self._term_paste)
@@ -886,6 +921,8 @@ class TerminalWidget(tk.Frame):
         if event.state & 4:  # Ctrl
             return
         if event.state & 8:  # Mod1 / Command on macOS — let bindings handle it
+            return
+        if sys.platform == "darwin" and (event.state & 0x10):  # Mod2 — Command on some Tk builds
             return
         if event.char and ord(event.char) >= 32:
             self._send(event.char)
