@@ -557,20 +557,32 @@ def setup_entry_clipboard(entry):
         entry.bind("<Button-2>", _context_menu)
         entry.bind("<Control-Button-1>", _context_menu)
 
-        # Catch-all: in frozen .app, Command may map to unknown modifier bit.
-        # Named bindings (<Command-v> etc.) won't match → add <Key> fallback.
+        # Catch-all: keysym may be Cyrillic on Russian layout (Cyrillic_em not v).
+        # macOS sets event.char='v' when Command held (Latin shortcut mode),
+        # but as extra safety, also map Cyrillic keysyms to Latin equivalents.
+        _cyr_map = {
+            "Cyrillic_em": "v", "Cyrillic_EM": "v",  # м/М → v
+            "Cyrillic_es": "c", "Cyrillic_ES": "c",  # с/С → c
+            "Cyrillic_che": "x", "Cyrillic_CHE": "x", # ч/Ч → x
+            "Cyrillic_ef": "a", "Cyrillic_EF": "a",  # ф/Ф → a
+        }
+
         def _mac_key_fallback(event):
             if event.state & 4:  # Ctrl — not Command
                 return
             modifier_mask = event.state & ~0x07  # clear Shift, CapsLock, Ctrl
             if modifier_mask:
-                if event.keysym == "v":
+                ch = (event.char or "").lower()
+                # Fallback: map Cyrillic keysym to Latin
+                if ch not in ("v", "c", "x", "a"):
+                    ch = _cyr_map.get(event.keysym, ch)
+                if ch == "v":
                     return _paste(event)
-                if event.keysym == "c":
+                if ch == "c":
                     return _copy(event)
-                if event.keysym == "x":
+                if ch == "x":
                     return _cut(event)
-                if event.keysym == "a":
+                if ch == "a":
                     return _select_all(event)
         entry.bind("<Key>", _mac_key_fallback)
     else:
@@ -940,13 +952,19 @@ class TerminalWidget(tk.Frame):
         # Any non-trivial modifier? (clear Shift=1, CapsLock=2, Ctrl=4)
         modifier_mask = event.state & ~0x07
         if modifier_mask:
-            # On macOS frozen .app, Command may map to ANY modifier bit.
-            # Named bindings (<Command-v> etc.) might not match.
-            # Catch-all: if any modifier + v/c → paste/copy.
+            # On macOS frozen .app, Command may map to ANY modifier bit,
+            # and keysym may be Cyrillic (Cyrillic_em instead of v) on Russian layout.
+            # event.char='v' when Command held (macOS Latin shortcut mode).
+            # Fallback: map Cyrillic keysyms to Latin equivalents.
             if sys.platform == "darwin":
-                if event.keysym == "v":
+                _cyr = {"Cyrillic_em": "v", "Cyrillic_EM": "v",
+                         "Cyrillic_es": "c", "Cyrillic_ES": "c"}
+                ch = (event.char or "").lower()
+                if ch not in ("v", "c"):
+                    ch = _cyr.get(event.keysym, ch)
+                if ch == "v":
                     return self._term_paste()
-                if event.keysym == "c":
+                if ch == "c":
                     return self._term_copy()
             return  # Other modifier combos — let bindings handle
         if event.char and ord(event.char) >= 32:
@@ -1597,6 +1615,119 @@ class App(tk.Tk):
             self.bind("<Control-equal>", lambda e: self._zoom(1))
             self.bind("<Control-minus>", lambda e: self._zoom(-1))
             self.bind("<Control-0>", lambda e: self._zoom(0))
+
+        # macOS: Cmd+V routed through Edit menu + bind_all <Key> catch-all.
+        # bind_all("<Key>") also includes debug logging.
+        if sys.platform == "darwin":
+            self._setup_mac_edit_menu()
+            self._setup_mac_clipboard_bind_all()  # includes debug key log
+        else:
+            self._debug_key_count = 0
+            self.bind_all("<Key>", self._debug_key_log)
+
+    def _debug_key_log(self, event):
+        """Log first 200 key events to /tmp/pca_key_debug.log for diagnostics."""
+        if self._debug_key_count >= 200:
+            return
+        self._debug_key_count += 1
+        try:
+            with open("/tmp/pca_key_debug.log", "a") as f:
+                f.write(
+                    f"#{self._debug_key_count} keysym={event.keysym} "
+                    f"char={event.char!r} state=0x{event.state:04x} "
+                    f"keycode={event.keycode} widget={event.widget}\n"
+                )
+        except Exception:
+            pass
+
+    def _setup_mac_edit_menu(self):
+        """Create standard macOS Edit menu so system routes Cmd+V/C/X to app."""
+        menubar = tk.Menu(self)
+
+        edit_menu = tk.Menu(menubar, tearoff=0)
+
+        def _do_paste():
+            w = self.focus_get()
+            if w:
+                w.event_generate("<<Paste>>")
+
+        def _do_copy():
+            w = self.focus_get()
+            if w:
+                w.event_generate("<<Copy>>")
+
+        def _do_cut():
+            w = self.focus_get()
+            if w:
+                w.event_generate("<<Cut>>")
+
+        def _do_select_all():
+            w = self.focus_get()
+            if w:
+                w.event_generate("<<SelectAll>>")
+
+        edit_menu.add_command(label="Cut", accelerator="Cmd+X", command=_do_cut)
+        edit_menu.add_command(label="Copy", accelerator="Cmd+C", command=_do_copy)
+        edit_menu.add_command(label="Paste", accelerator="Cmd+V", command=_do_paste)
+        edit_menu.add_separator()
+        edit_menu.add_command(label="Select All", accelerator="Cmd+A", command=_do_select_all)
+
+        menubar.add_cascade(label="Edit", menu=edit_menu)
+        self.config_menu = menubar
+        tk.Tk.configure(self, menu=menubar)
+
+    def _setup_mac_clipboard_bind_all(self):
+        """Application-level clipboard handler for macOS.
+        Uses event.char (not keysym) to work with ANY keyboard layout
+        (Russian Cyrillic_em, etc.). Also logs keys for debug."""
+        self._debug_key_count = 0
+
+        def _global_key(event):
+            # Debug logging
+            if self._debug_key_count < 200:
+                self._debug_key_count += 1
+                try:
+                    with open("/tmp/pca_key_debug.log", "a") as f:
+                        f.write(
+                            f"#{self._debug_key_count} keysym={event.keysym} "
+                            f"char={event.char!r} state=0x{event.state:04x} "
+                            f"keycode={event.keycode} widget={event.widget}\n"
+                        )
+                except Exception:
+                    pass
+
+            # Clipboard: any modifier (except Ctrl/Shift/CapsLock) + v/c/x/a
+            if event.state & 4:  # Ctrl — not Command
+                return
+            modifier_mask = event.state & ~0x07
+            if not modifier_mask:
+                return
+            _cyr = {
+                "Cyrillic_em": "v", "Cyrillic_EM": "v",
+                "Cyrillic_es": "c", "Cyrillic_ES": "c",
+                "Cyrillic_che": "x", "Cyrillic_CHE": "x",
+                "Cyrillic_ef": "a", "Cyrillic_EF": "a",
+            }
+            ch = (event.char or "").lower()
+            if ch not in ("v", "c", "x", "a"):
+                ch = _cyr.get(event.keysym, ch)
+            w = self.focus_get()
+            if not w:
+                return
+            if ch == "v":
+                w.event_generate("<<Paste>>")
+                return "break"
+            if ch == "c":
+                w.event_generate("<<Copy>>")
+                return "break"
+            if ch == "x":
+                w.event_generate("<<Cut>>")
+                return "break"
+            if ch == "a":
+                w.event_generate("<<SelectAll>>")
+                return "break"
+
+        self.bind_all("<Key>", _global_key)
 
     def _apply_theme(self):
         style = ttk.Style()
