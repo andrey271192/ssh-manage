@@ -5,7 +5,7 @@ Tkinter GUI + paramiko SSH + JSON session store.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, font as tkfont, simpledialog
+from tkinter import ttk, messagebox, font as tkfont, simpledialog, filedialog
 import paramiko
 import threading
 import json
@@ -19,6 +19,7 @@ import urllib.error
 import ssl
 from datetime import datetime
 from pathlib import Path
+import stat
 
 APP_NAME = "PCA SSH"
 APP_SUBTITLE = "Private Control Administration"
@@ -1130,6 +1131,380 @@ def call_deepseek_api(api_key, query):
     return ""
 
 
+# ── SFTP File Manager Widget ──────────────────────────────────
+
+class FileManagerWidget(tk.Frame):
+    """SFTP file browser with upload/download, context menu, and clipboard."""
+
+    def __init__(self, master, ssh_client, on_send_cmd=None, **kw):
+        super().__init__(master, bg="#1e1e2e", **kw)
+        self.ssh = ssh_client
+        self.sftp = None
+        self.cwd = "/"
+        self._clipboard = None  # (mode, path) where mode = "copy" or "cut"
+        self._on_send_cmd = on_send_cmd  # callback to send command to terminal
+
+        self._build_ui()
+        self._connect_sftp()
+
+    def _build_ui(self):
+        bg, fg = "#1e1e2e", "#cdd6f4"
+
+        # Toolbar
+        toolbar = tk.Frame(self, bg="#181825")
+        toolbar.pack(fill=tk.X)
+
+        btn_s = {"bg": "#313244", "fg": "#89b4fa", "activebackground": "#45475a",
+                 "relief": tk.FLAT, "font": ("Consolas", 9), "padx": 4, "pady": 2}
+
+        tk.Button(toolbar, text="⬆ Вверх", command=self._go_up, **btn_s).pack(side=tk.LEFT, padx=2, pady=2)
+        tk.Button(toolbar, text="⟳ Обновить", command=self._refresh, **btn_s).pack(side=tk.LEFT, padx=2, pady=2)
+        tk.Button(toolbar, text="📁 Создать папку", command=self._mkdir, **btn_s).pack(side=tk.LEFT, padx=2, pady=2)
+        tk.Button(toolbar, text="⬆ Загрузить", command=self._upload, **btn_s).pack(side=tk.LEFT, padx=2, pady=2)
+        tk.Button(toolbar, text="⬇ Скачать", command=self._download, **btn_s).pack(side=tk.LEFT, padx=2, pady=2)
+
+        # Path bar
+        path_frame = tk.Frame(self, bg=bg)
+        path_frame.pack(fill=tk.X, padx=4, pady=2)
+        tk.Label(path_frame, text="Путь:", bg=bg, fg="#6c7086",
+                 font=("Consolas", 9)).pack(side=tk.LEFT)
+        self.path_var = tk.StringVar(value="/")
+        self.path_entry = tk.Entry(path_frame, textvariable=self.path_var,
+                                    bg="#313244", fg=fg, insertbackground=fg,
+                                    relief=tk.FLAT, font=("Consolas", 9))
+        self.path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+        self.path_entry.bind("<Return>", lambda e: self._navigate(self.path_var.get()))
+        setup_entry_clipboard(self.path_entry)
+
+        tk.Button(path_frame, text="→", command=lambda: self._navigate(self.path_var.get()),
+                  **btn_s).pack(side=tk.RIGHT)
+
+        # File tree
+        tree_frame = tk.Frame(self, bg=bg)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=2)
+
+        cols = ("size", "modified", "perms")
+        self.tree = ttk.Treeview(tree_frame, columns=cols, show="tree headings",
+                                  selectmode="browse")
+        self.tree.heading("#0", text="Имя")
+        self.tree.heading("size", text="Размер")
+        self.tree.heading("modified", text="Изменён")
+        self.tree.heading("perms", text="Права")
+        self.tree.column("#0", width=250, minwidth=150)
+        self.tree.column("size", width=80, minwidth=60)
+        self.tree.column("modified", width=140, minwidth=100)
+        self.tree.column("perms", width=80, minwidth=60)
+
+        scroll = ttk.Scrollbar(tree_frame, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.pack(fill=tk.BOTH, expand=True)
+
+        self.tree.bind("<Double-1>", self._on_double_click)
+        self.tree.bind("<Button-3>", self._context_menu)
+        if sys.platform == "darwin":
+            self.tree.bind("<Button-2>", self._context_menu)
+            self.tree.bind("<Control-Button-1>", self._context_menu)
+
+        # Status bar
+        self.status_var = tk.StringVar(value="Подключение...")
+        tk.Label(self, textvariable=self.status_var, bg="#181825", fg="#6c7086",
+                 font=("Consolas", 8), anchor=tk.W).pack(fill=tk.X, padx=4)
+
+        # Close button
+        close_frame = tk.Frame(self, bg=bg)
+        close_frame.pack(fill=tk.X, side=tk.BOTTOM)
+        tk.Button(close_frame, text="✕ Закрыть вкладку",
+                  bg="#313244", fg="#cdd6f4", activebackground="#45475a",
+                  relief=tk.FLAT, font=("Consolas", 9), padx=6, pady=2,
+                  command=self._close).pack(side=tk.RIGHT, padx=4, pady=2)
+
+    def _connect_sftp(self):
+        def _do():
+            try:
+                self.sftp = self.ssh.open_sftp()
+                self.cwd = self.sftp.normalize(".")
+                self.after(0, self._refresh)
+                self.after(0, lambda: self.status_var.set(f"SFTP подключён: {self.cwd}"))
+            except Exception as e:
+                self.after(0, lambda: self.status_var.set(f"Ошибка SFTP: {e}"))
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _refresh(self):
+        if not self.sftp:
+            return
+        self.tree.delete(*self.tree.get_children())
+        self.path_var.set(self.cwd)
+
+        def _load():
+            try:
+                items = self.sftp.listdir_attr(self.cwd)
+                # Sort: dirs first, then by name
+                dirs = sorted([f for f in items if stat.S_ISDIR(f.st_mode)],
+                              key=lambda f: f.filename.lower())
+                files = sorted([f for f in items if not stat.S_ISDIR(f.st_mode)],
+                               key=lambda f: f.filename.lower())
+                self.after(0, lambda: self._populate(dirs + files))
+                self.after(0, lambda: self.status_var.set(
+                    f"{self.cwd} — {len(dirs)} папок, {len(files)} файлов"))
+            except Exception as e:
+                self.after(0, lambda: self.status_var.set(f"Ошибка: {e}"))
+
+        threading.Thread(target=_load, daemon=True).start()
+
+    def _populate(self, items):
+        for f in items:
+            is_dir = stat.S_ISDIR(f.st_mode)
+            icon = "📁" if is_dir else "📄"
+            name = f"{icon} {f.filename}"
+            size = "" if is_dir else self._human_size(f.st_size)
+            mtime = datetime.fromtimestamp(f.st_mtime).strftime("%Y-%m-%d %H:%M")
+            perms = stat.filemode(f.st_mode)
+            self.tree.insert("", tk.END, text=name, values=(size, mtime, perms),
+                             tags=("dir" if is_dir else "file",))
+
+        self.tree.tag_configure("dir", foreground="#89b4fa")
+        self.tree.tag_configure("file", foreground="#cdd6f4")
+
+    @staticmethod
+    def _human_size(n):
+        for unit in ("Б", "КБ", "МБ", "ГБ"):
+            if n < 1024:
+                return f"{n:.0f} {unit}" if n == int(n) else f"{n:.1f} {unit}"
+            n /= 1024
+        return f"{n:.1f} ТБ"
+
+    def _get_selected_name(self):
+        sel = self.tree.selection()
+        if not sel:
+            return None
+        text = self.tree.item(sel[0], "text")
+        # Remove icon prefix
+        return text.split(" ", 1)[1] if " " in text else text
+
+    def _get_selected_path(self):
+        name = self._get_selected_name()
+        if not name:
+            return None
+        return self.cwd.rstrip("/") + "/" + name
+
+    def _on_double_click(self, event):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        tags = self.tree.item(sel[0], "tags")
+        if "dir" in tags:
+            name = self._get_selected_name()
+            self._navigate(self.cwd.rstrip("/") + "/" + name)
+
+    def _navigate(self, path):
+        def _do():
+            try:
+                resolved = self.sftp.normalize(path)
+                self.sftp.listdir(resolved)  # test access
+                self.cwd = resolved
+                self.after(0, self._refresh)
+            except Exception as e:
+                self.after(0, lambda: self.status_var.set(f"Ошибка: {e}"))
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _go_up(self):
+        parent = "/".join(self.cwd.rstrip("/").split("/")[:-1]) or "/"
+        self._navigate(parent)
+
+    def _mkdir(self):
+        name = simpledialog.askstring("Новая папка", "Имя:", parent=self)
+        if name and name.strip():
+            def _do():
+                try:
+                    self.sftp.mkdir(self.cwd.rstrip("/") + "/" + name.strip())
+                    self.after(0, self._refresh)
+                except Exception as e:
+                    self.after(0, lambda: self.status_var.set(f"Ошибка: {e}"))
+            threading.Thread(target=_do, daemon=True).start()
+
+    def _upload(self):
+        local_path = filedialog.askopenfilename(parent=self, title="Выбрать файл для загрузки")
+        if not local_path:
+            return
+        fname = os.path.basename(local_path)
+        remote_path = self.cwd.rstrip("/") + "/" + fname
+        self.status_var.set(f"Загрузка {fname}...")
+
+        def _do():
+            try:
+                self.sftp.put(local_path, remote_path)
+                self.after(0, self._refresh)
+                self.after(0, lambda: self.status_var.set(f"Загружен: {fname}"))
+            except Exception as e:
+                self.after(0, lambda: self.status_var.set(f"Ошибка загрузки: {e}"))
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _download(self):
+        remote = self._get_selected_path()
+        if not remote:
+            return
+        fname = os.path.basename(remote)
+        local = filedialog.asksaveasfilename(parent=self, title="Сохранить как",
+                                              initialfile=fname)
+        if not local:
+            return
+        self.status_var.set(f"Скачивание {fname}...")
+
+        def _do():
+            try:
+                self.sftp.get(remote, local)
+                self.after(0, lambda: self.status_var.set(f"Скачан: {local}"))
+            except Exception as e:
+                self.after(0, lambda: self.status_var.set(f"Ошибка скачивания: {e}"))
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _delete_selected(self):
+        path = self._get_selected_path()
+        if not path:
+            return
+        sel = self.tree.selection()
+        tags = self.tree.item(sel[0], "tags") if sel else ()
+        name = self._get_selected_name()
+        if not messagebox.askyesno("Удалить?", f"Удалить «{name}»?", parent=self):
+            return
+
+        def _do():
+            try:
+                if "dir" in tags:
+                    self.sftp.rmdir(path)
+                else:
+                    self.sftp.remove(path)
+                self.after(0, self._refresh)
+            except Exception as e:
+                self.after(0, lambda: self.status_var.set(f"Ошибка удаления: {e}"))
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _copy_path(self):
+        path = self._get_selected_path()
+        if path:
+            self.clipboard_clear()
+            self.clipboard_append(path)
+            self.status_var.set(f"Скопирован путь: {path}")
+
+    def _copy_file(self):
+        path = self._get_selected_path()
+        if path:
+            self._clipboard = ("copy", path)
+            self.status_var.set(f"Копировать: {path}")
+
+    def _cut_file(self):
+        path = self._get_selected_path()
+        if path:
+            self._clipboard = ("cut", path)
+            self.status_var.set(f"Вырезать: {path}")
+
+    def _paste_file(self):
+        if not self._clipboard:
+            return
+        mode, src = self._clipboard
+        fname = os.path.basename(src)
+        dst = self.cwd.rstrip("/") + "/" + fname
+        self.status_var.set(f"{'Перемещение' if mode == 'cut' else 'Копирование'} {fname}...")
+
+        def _do():
+            try:
+                if mode == "cut":
+                    self.sftp.rename(src, dst)
+                else:
+                    # Copy via SSH cp command
+                    transport = self.ssh.get_transport()
+                    chan = transport.open_session()
+                    chan.exec_command(f'cp -r "{src}" "{dst}"')
+                    chan.recv_exit_status()
+                    chan.close()
+                self._clipboard = None
+                self.after(0, self._refresh)
+                self.after(0, lambda: self.status_var.set(f"Готово: {dst}"))
+            except Exception as e:
+                self.after(0, lambda: self.status_var.set(f"Ошибка: {e}"))
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _rename_selected(self):
+        path = self._get_selected_path()
+        name = self._get_selected_name()
+        if not path:
+            return
+        new_name = simpledialog.askstring("Переименовать", "Новое имя:", parent=self,
+                                           initialvalue=name)
+        if new_name and new_name.strip() and new_name != name:
+            dst = self.cwd.rstrip("/") + "/" + new_name.strip()
+            def _do():
+                try:
+                    self.sftp.rename(path, dst)
+                    self.after(0, self._refresh)
+                except Exception as e:
+                    self.after(0, lambda: self.status_var.set(f"Ошибка: {e}"))
+            threading.Thread(target=_do, daemon=True).start()
+
+    def _send_to_terminal(self):
+        """Send selected file path to terminal for AI/command use."""
+        path = self._get_selected_path()
+        if path and self._on_send_cmd:
+            self._on_send_cmd(path)
+
+    def _context_menu(self, event):
+        sel = self.tree.identify_row(event.y)
+        if sel:
+            self.tree.selection_set(sel)
+
+        menu = tk.Menu(self, tearoff=0, bg="#313244", fg="#cdd6f4",
+                       activebackground="#45475a")
+        if sel:
+            tags = self.tree.item(sel, "tags")
+            if "dir" in tags:
+                menu.add_command(label="📂 Открыть", command=lambda: self._on_double_click(None))
+            else:
+                menu.add_command(label="⬇ Скачать", command=self._download)
+            menu.add_separator()
+            menu.add_command(label="📋 Копировать путь", command=self._copy_path)
+            menu.add_command(label="📄 Копировать", command=self._copy_file)
+            menu.add_command(label="✂ Вырезать", command=self._cut_file)
+            menu.add_command(label="✏ Переименовать", command=self._rename_selected)
+            menu.add_command(label="🗑 Удалить", command=self._delete_selected)
+            menu.add_separator()
+            menu.add_command(label="➜ В терминал", command=self._send_to_terminal)
+        if self._clipboard:
+            menu.add_command(label="📋 Вставить", command=self._paste_file)
+        menu.add_separator()
+        menu.add_command(label="📁 Создать папку", command=self._mkdir)
+        menu.add_command(label="⬆ Загрузить файл", command=self._upload)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def download_file(self, remote_path, local_path=None):
+        """API method for AI agent to download a file."""
+        if not local_path:
+            fname = os.path.basename(remote_path)
+            desktop = str(Path.home() / "Desktop")
+            local_path = os.path.join(desktop, fname)
+        self.status_var.set(f"AI: скачивание {remote_path}...")
+
+        def _do():
+            try:
+                self.sftp.get(remote_path, local_path)
+                self.after(0, lambda: self.status_var.set(f"AI: скачан → {local_path}"))
+            except Exception as e:
+                self.after(0, lambda: self.status_var.set(f"Ошибка: {e}"))
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _close(self):
+        if self.sftp:
+            try:
+                self.sftp.close()
+            except Exception:
+                pass
+        # Find parent notebook and remove this tab
+        parent = self.master
+        if isinstance(parent, ttk.Notebook):
+            parent.forget(self)
+        self.destroy()
+
+
 # ── Main Application ───────────────────────────────────────────
 
 class App(tk.Tk):
@@ -1146,9 +1521,20 @@ class App(tk.Tk):
         self._commands_visible = self.config.get("commands_visible", True)
         self._selected_card_idx = None
 
+        self._font_size = self.config.get("font_size", 10)
         self._apply_theme()
         self._build_ui()
         self._refresh_cards()
+
+        # Zoom: Cmd+/- (Mac) or Ctrl+/- (Windows)
+        if sys.platform == "darwin":
+            self.bind("<Command-equal>", lambda e: self._zoom(1))
+            self.bind("<Command-minus>", lambda e: self._zoom(-1))
+            self.bind("<Command-0>", lambda e: self._zoom(0))
+        else:
+            self.bind("<Control-equal>", lambda e: self._zoom(1))
+            self.bind("<Control-minus>", lambda e: self._zoom(-1))
+            self.bind("<Control-0>", lambda e: self._zoom(0))
 
     def _apply_theme(self):
         style = ttk.Style()
@@ -1170,6 +1556,42 @@ class App(tk.Tk):
         style.map("TNotebook.Tab", background=[("selected", "#585b70")])
         style.configure("TEntry", fieldbackground="#313244", foreground=fg)
         style.configure("TCombobox", fieldbackground="#313244", foreground=fg)
+
+    def _zoom(self, delta):
+        """Change font size. delta=+1/-1 or 0 to reset."""
+        if delta == 0:
+            self._font_size = 10
+        else:
+            self._font_size = max(7, min(18, self._font_size + delta))
+        self.config.set("font_size", self._font_size)
+        s = self._font_size
+        # Update all text widgets
+        for widget in self._all_widgets():
+            try:
+                f = widget.cget("font")
+                if isinstance(f, str) and f:
+                    widget.configure(font=(f, s))
+                elif isinstance(f, tuple) and len(f) >= 2:
+                    widget.configure(font=(f[0], s) + f[2:])
+            except (tk.TclError, TypeError):
+                pass
+        # Update terminal tabs
+        for term in self.terminals.values():
+            try:
+                term.text.configure(font=("Consolas", s))
+            except (tk.TclError, AttributeError):
+                pass
+
+    def _all_widgets(self):
+        """Yield all widgets recursively."""
+        stack = [self]
+        while stack:
+            w = stack.pop()
+            yield w
+            try:
+                stack.extend(w.winfo_children())
+            except Exception:
+                pass
 
     def _open_url(self, url):
         import webbrowser
@@ -1269,8 +1691,9 @@ class App(tk.Tk):
         toolbar = tk.Frame(parent, bg="#181825")
         toolbar.pack(fill=tk.X)
 
-        btn_style = {"bg": "#45475a", "fg": "#cdd6f4", "activebackground": "#585b70",
-                     "relief": tk.FLAT, "font": ("Consolas", 9), "padx": 6, "pady": 3}
+        btn_style = {"bg": "#313244", "fg": "#89b4fa", "activebackground": "#45475a",
+                     "activeforeground": "#b4d0fb", "relief": tk.FLAT,
+                     "font": ("Consolas", 10), "padx": 8, "pady": 4}
 
         tk.Button(toolbar, text="＋ Сессия", command=self._new_session, **btn_style).pack(side=tk.LEFT, padx=2, pady=3)
         tk.Button(toolbar, text="＋ Группа", command=self._new_group, **btn_style).pack(side=tk.LEFT, padx=2, pady=3)
@@ -1554,10 +1977,17 @@ class App(tk.Tk):
         )
         self._toggle_btn.pack(side=tk.LEFT, padx=6, pady=4)
 
+        # Paned window for commands + agent (draggable splitter)
+        self._right_paned = tk.PanedWindow(
+            parent, orient=tk.VERTICAL, bg="#45475a",
+            sashwidth=6, sashrelief=tk.FLAT, opaqueresize=True,
+        )
+        self._right_paned.pack(fill=tk.BOTH, expand=True)
+
         # Commands panel (collapsible)
-        self.commands_container = tk.Frame(parent, bg="#1e1e2e")
+        self.commands_container = tk.Frame(self._right_paned, bg="#1e1e2e")
         if self._commands_visible:
-            self.commands_container.pack(fill=tk.BOTH, expand=True)
+            self._right_paned.add(self.commands_container, minsize=80)
 
         # Search bar
         search_frame = tk.Frame(self.commands_container, bg="#1e1e2e")
@@ -1594,9 +2024,10 @@ class App(tk.Tk):
         self._populate_commands()
 
         # ── Agent Panel ──
-        tk.Frame(parent, bg="#45475a", height=1).pack(fill=tk.X, padx=4, pady=2)
+        agent_wrapper = tk.Frame(self._right_paned, bg="#1e1e2e")
+        self._right_paned.add(agent_wrapper, minsize=120)
 
-        agent_header = tk.Frame(parent, bg="#181825")
+        agent_header = tk.Frame(agent_wrapper, bg="#181825")
         agent_header.pack(fill=tk.X)
 
         tk.Label(agent_header, text="AI Агент", bg="#181825", fg="#a6e3a1",
@@ -1616,8 +2047,8 @@ class App(tk.Tk):
                   cursor="hand2", command=self._ai_settings).pack(side=tk.RIGHT, padx=6)
 
         # Agent content
-        self.agent_frame = tk.Frame(parent, bg="#1e1e2e")
-        self.agent_frame.pack(fill=tk.BOTH, expand=not self._commands_visible, padx=4, pady=2)
+        self.agent_frame = tk.Frame(agent_wrapper, bg="#1e1e2e")
+        self.agent_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=2)
 
         # Input
         agent_input = tk.Frame(self.agent_frame, bg="#1e1e2e")
@@ -1662,14 +2093,14 @@ class App(tk.Tk):
         self.config.set("commands_visible", self._commands_visible)
 
         if self._commands_visible:
-            self.commands_container.pack(fill=tk.BOTH, expand=True,
-                                          before=self.commands_container.master.winfo_children()[-3])
+            # Add commands pane back (before agent)
+            panes = self._right_paned.panes()
+            if str(self.commands_container) not in panes:
+                self._right_paned.add(self.commands_container, before=panes[0] if panes else None, minsize=80)
             self._toggle_btn.configure(text="Команды ▼")
-            self.agent_frame.pack_configure(expand=False)
         else:
-            self.commands_container.pack_forget()
+            self._right_paned.forget(self.commands_container)
             self._toggle_btn.configure(text="Команды ▶")
-            self.agent_frame.pack_configure(expand=True)
 
     # ── AI Agent ──────────────────────────────────────────────
 
@@ -1809,6 +2240,13 @@ class App(tk.Tk):
         if isinstance(widget, TerminalWidget) and widget.channel and not widget.channel.closed:
             widget._send(line + "\r")
         else:
+            # Try to find any active terminal
+            for tab_id in self.notebook.tabs():
+                w = self.nametowidget(tab_id)
+                if isinstance(w, TerminalWidget) and w.channel and not w.channel.closed:
+                    w._send(line + "\r")
+                    self.notebook.select(w)
+                    return
             messagebox.showinfo("Нет терминала", "Сначала подключитесь к серверу")
 
     # ── Commands Tree ─────────────────────────────────────────
@@ -1947,15 +2385,42 @@ class App(tk.Tk):
         self.notebook.select(term)
         term.connect(host, port, user, password)
 
+        # Store connection info for file manager
+        term._conn_info = {"host": host, "port": port, "user": user, "password": password}
+
         close_btn_frame = tk.Frame(term, bg="#1e1e2e")
-        close_btn = tk.Button(
-            close_btn_frame, text="✕ Закрыть вкладку",
-            bg="#45475a", fg="#cdd6f4", activebackground="#585b70",
+
+        btn_s = {"bg": "#313244", "fg": "#89b4fa", "activebackground": "#45475a",
+                 "relief": tk.FLAT, "font": ("Consolas", 9), "padx": 6, "pady": 2}
+        tk.Button(close_btn_frame, text="📁 Файлы",
+                  command=lambda: self._open_file_manager(term),
+                  **btn_s).pack(side=tk.LEFT, padx=4, pady=2)
+
+        tk.Button(
+            close_btn_frame, text="✕ Закрыть",
+            bg="#313244", fg="#cdd6f4", activebackground="#45475a",
             relief=tk.FLAT, font=("Consolas", 9), padx=6, pady=2,
             command=lambda: self._close_tab(term),
-        )
-        close_btn.pack(side=tk.RIGHT, padx=4, pady=2)
+        ).pack(side=tk.RIGHT, padx=4, pady=2)
         close_btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
+
+    def _open_file_manager(self, term):
+        """Open SFTP file manager tab using terminal's SSH connection."""
+        if not term.ssh or not term.ssh.get_transport() or not term.ssh.get_transport().is_active():
+            messagebox.showerror("Ошибка", "SSH не подключён", parent=self)
+            return
+        info = getattr(term, "_conn_info", {})
+        tab_name = f"📁 {info.get('user', '')}@{info.get('host', '')}"
+
+        def send_cmd(path):
+            """Send path/command to active terminal."""
+            if term.channel and not term.channel.closed:
+                term._send(path + "\n")
+                self.notebook.select(term)
+
+        fm = FileManagerWidget(self.notebook, term.ssh, on_send_cmd=send_cmd)
+        self.notebook.add(fm, text=tab_name)
+        self.notebook.select(fm)
 
     def _close_tab(self, term):
         term.disconnect()
