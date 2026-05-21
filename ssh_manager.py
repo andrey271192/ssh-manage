@@ -1145,7 +1145,7 @@ class FileManagerWidget(tk.Frame):
         self._on_send_cmd = on_send_cmd  # callback to send command to terminal
 
         self._build_ui()
-        self._connect_sftp()
+        # Don't auto-connect — caller triggers _connect_sftp after SSH is ready
 
     def _build_ui(self):
         bg, fg = "#1e1e2e", "#cdd6f4"
@@ -2405,22 +2405,36 @@ class App(tk.Tk):
         close_btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
 
     def _open_file_manager(self, term):
-        """Open SFTP file manager tab using terminal's SSH connection."""
-        if not term.ssh or not term.ssh.get_transport() or not term.ssh.get_transport().is_active():
-            messagebox.showerror("Ошибка", "SSH не подключён", parent=self)
+        """Open SFTP file manager tab with its own SSH connection."""
+        info = getattr(term, "_conn_info", None)
+        if not info:
+            messagebox.showerror("Ошибка", "Нет данных подключения", parent=self)
             return
-        info = getattr(term, "_conn_info", {})
-        tab_name = f"📁 {info.get('user', '')}@{info.get('host', '')}"
+        tab_name = f"📁 {info['user']}@{info['host']}"
 
         def send_cmd(path):
-            """Send path/command to active terminal."""
             if term.channel and not term.channel.closed:
                 term._send(path + "\n")
                 self.notebook.select(term)
 
-        fm = FileManagerWidget(self.notebook, term.ssh, on_send_cmd=send_cmd)
+        # Create separate SSH for SFTP (avoid conflicts with terminal shell)
+        ssh2 = paramiko.SSHClient()
+        ssh2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        fm = FileManagerWidget(self.notebook, ssh2, on_send_cmd=send_cmd)
         self.notebook.add(fm, text=tab_name)
         self.notebook.select(fm)
+
+        # Connect in background
+        def _connect():
+            try:
+                ssh2.connect(info["host"], port=info["port"],
+                             username=info["user"], password=info["password"],
+                             timeout=10, look_for_keys=False, allow_agent=False)
+                fm.after(0, fm._connect_sftp)
+            except Exception as e:
+                fm.after(0, lambda: fm.status_var.set(f"Ошибка SSH: {e}"))
+        threading.Thread(target=_connect, daemon=True).start()
 
     def _close_tab(self, term):
         term.disconnect()
