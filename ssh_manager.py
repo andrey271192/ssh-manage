@@ -26,7 +26,7 @@ VERSION = "2.0"
 # ── Card Colors (Catppuccin) ──────────────────────────────────
 
 CARD_COLORS = [
-    "#89b4fa",  # blue
+    "#6c8fff",  # blue
     "#a6e3a1",  # green
     "#cba6f7",  # purple
     "#fab387",  # orange
@@ -521,8 +521,8 @@ def setup_entry_clipboard(entry):
         return "break"
 
     def _context_menu(event):
-        menu = tk.Menu(entry, tearoff=0, bg="#313244", fg="#cdd6f4",
-                       activebackground="#45475a")
+        menu = tk.Menu(entry, tearoff=0, bg="#252536", fg="#e0e0e8",
+                       activebackground="#353550")
         menu.add_command(label="Cut", command=_cut)
         menu.add_command(label="Copy", command=_copy)
         menu.add_command(label="Paste", command=_paste)
@@ -814,9 +814,9 @@ class TerminalWidget(tk.Frame):
         self.text = tk.Text(
             self,
             bg="#1e1e2e",
-            fg="#cdd6f4",
-            insertbackground="#cdd6f4",
-            selectbackground="#45475a",
+            fg="#e0e0e8",
+            insertbackground="#e0e0e8",
+            selectbackground="#353550",
             font=("Consolas", 11),
             wrap=tk.CHAR,
             padx=6,
@@ -870,7 +870,7 @@ class TerminalWidget(tk.Frame):
             self.text.bind("<Control-Shift-C>", self._term_copy)
 
         self.text.tag_configure("error", foreground="#f38ba8")
-        self.text.tag_configure("info", foreground="#89b4fa")
+        self.text.tag_configure("info", foreground="#6c8fff")
 
     def connect(self, host, port, user, password, key_file=None):
         self.running = True
@@ -1054,11 +1054,12 @@ class SessionDialog(tk.Toplevel):
 
         self.entries = {}
         for i, (label, key, default) in enumerate(fields):
-            tk.Label(frame, text=label, bg="#1e1e2e", fg="#cdd6f4",
-                     font=("Consolas", 10)).grid(row=i, column=0, sticky="w", pady=3)
-            entry = tk.Entry(frame, width=35, bg="#313244", fg="#cdd6f4",
-                             insertbackground="#cdd6f4", relief=tk.FLAT,
-                             font=("Consolas", 10))
+            tk.Label(frame, text=label, bg="#1e1e2e", fg="#e0e0e8",
+                     font=("Helvetica", 10)).grid(row=i, column=0, sticky="w", pady=3)
+            entry = tk.Entry(frame, width=35, bg="#252536", fg="#e0e0e8",
+                             insertbackground="#e0e0e8", relief=tk.FLAT,
+                             font=("Helvetica", 10), highlightthickness=1,
+                             highlightcolor="#6c8fff", highlightbackground="#2e2e42")
             if key == "password":
                 entry.configure(show="*")
             entry.insert(0, default)
@@ -1068,14 +1069,15 @@ class SessionDialog(tk.Toplevel):
 
         # Browse button for SSH key file
         key_entry = self.entries["key_file"]
-        browse_btn = tk.Button(frame, text="...", bg="#45475a", fg="#cdd6f4",
-                               relief=tk.FLAT, font=("Consolas", 9), padx=4,
+        browse_btn = tk.Button(frame, text="...", bg="#2a2a3d", fg="#e0e0e8",
+                               relief=tk.FLAT, bd=0, font=("Helvetica", 9), padx=6,
+                               cursor="hand2", highlightthickness=0,
                                command=self._browse_key)
         key_row = len(fields) - 1  # last field
         browse_btn.grid(row=key_row, column=2, padx=4, pady=3)
 
         row_group = len(fields)
-        tk.Label(frame, text="Группа:", bg="#1e1e2e", fg="#cdd6f4",
+        tk.Label(frame, text="Группа:", bg="#1e1e2e", fg="#e0e0e8",
                  font=("Consolas", 10)).grid(row=row_group, column=0, sticky="w", pady=3)
         group_frame = tk.Frame(frame, bg="#1e1e2e")
         group_frame.grid(row=row_group, column=1, sticky="ew", pady=3, padx=(8, 0))
@@ -1090,13 +1092,15 @@ class SessionDialog(tk.Toplevel):
         btn_frame = tk.Frame(frame, bg="#1e1e2e")
         btn_frame.grid(row=row_group + 1, column=0, columnspan=2, pady=(12, 0))
 
-        ok_btn = tk.Button(btn_frame, text="OK", bg="#45475a", fg="#cdd6f4",
-                           activebackground="#585b70", relief=tk.FLAT,
-                           font=("Consolas", 10), padx=20, pady=4, command=self._ok)
+        ok_btn = tk.Button(btn_frame, text="OK", bg="#6c8fff", fg="#ffffff",
+                           activebackground="#5a7de6", relief=tk.FLAT, bd=0,
+                           font=("Helvetica", 10, "bold"), padx=24, pady=5,
+                           cursor="hand2", highlightthickness=0, command=self._ok)
         ok_btn.pack(side=tk.LEFT, padx=4)
-        cancel_btn = tk.Button(btn_frame, text="Отмена", bg="#45475a", fg="#cdd6f4",
-                               activebackground="#585b70", relief=tk.FLAT,
-                               font=("Consolas", 10), padx=20, pady=4, command=self.destroy)
+        cancel_btn = tk.Button(btn_frame, text="Отмена", bg="#2a2a3d", fg="#8899aa",
+                               activebackground="#353550", relief=tk.FLAT, bd=0,
+                               font=("Helvetica", 10), padx=24, pady=5,
+                               cursor="hand2", highlightthickness=0, command=self.destroy)
         cancel_btn.pack(side=tk.LEFT, padx=4)
 
         self.entries["host"].focus_set()
@@ -1156,14 +1160,14 @@ class FileManagerWidget(tk.Frame):
         # Don't auto-connect — caller triggers _connect_sftp after SSH is ready
 
     def _build_ui(self):
-        bg, fg = "#1e1e2e", "#cdd6f4"
+        bg, fg = "#1e1e2e", "#e0e0e8"
 
-        # Toolbar
-        toolbar = tk.Frame(self, bg="#181825")
-        toolbar.pack(fill=tk.X)
+        toolbar = tk.Frame(self, bg="#1e1e2e")
+        toolbar.pack(fill=tk.X, padx=4, pady=(4, 2))
 
-        btn_s = {"bg": "#313244", "fg": "#89b4fa", "activebackground": "#45475a",
-                 "relief": tk.FLAT, "font": ("Consolas", 9), "padx": 4, "pady": 2}
+        btn_s = {"bg": "#2a2a3d", "fg": "#8899cc", "activebackground": "#353550",
+                 "relief": tk.FLAT, "bd": 0, "font": ("Helvetica", 9), "padx": 6, "pady": 3,
+                 "cursor": "hand2", "highlightthickness": 0}
 
         tk.Button(toolbar, text="⬆ Вверх", command=self._go_up, **btn_s).pack(side=tk.LEFT, padx=2, pady=2)
         tk.Button(toolbar, text="⟳ Обновить", command=self._refresh, **btn_s).pack(side=tk.LEFT, padx=2, pady=2)
@@ -1171,15 +1175,16 @@ class FileManagerWidget(tk.Frame):
         tk.Button(toolbar, text="⬆ Загрузить", command=self._upload, **btn_s).pack(side=tk.LEFT, padx=2, pady=2)
         tk.Button(toolbar, text="⬇ Скачать", command=self._download, **btn_s).pack(side=tk.LEFT, padx=2, pady=2)
 
-        # Path bar
         path_frame = tk.Frame(self, bg=bg)
-        path_frame.pack(fill=tk.X, padx=4, pady=2)
+        path_frame.pack(fill=tk.X, padx=6, pady=2)
         tk.Label(path_frame, text="Путь:", bg=bg, fg="#6c7086",
-                 font=("Consolas", 9)).pack(side=tk.LEFT)
+                 font=("Helvetica", 9)).pack(side=tk.LEFT)
         self.path_var = tk.StringVar(value="/")
         self.path_entry = tk.Entry(path_frame, textvariable=self.path_var,
-                                    bg="#313244", fg=fg, insertbackground=fg,
-                                    relief=tk.FLAT, font=("Consolas", 9))
+                                    bg="#252536", fg=fg, insertbackground=fg,
+                                    relief=tk.FLAT, font=("Helvetica", 9),
+                                    highlightthickness=1, highlightcolor="#6c8fff",
+                                    highlightbackground="#2e2e42")
         self.path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
         self.path_entry.bind("<Return>", lambda e: self._navigate(self.path_var.get()))
         setup_entry_clipboard(self.path_entry)
@@ -1187,7 +1192,6 @@ class FileManagerWidget(tk.Frame):
         tk.Button(path_frame, text="→", command=lambda: self._navigate(self.path_var.get()),
                   **btn_s).pack(side=tk.RIGHT)
 
-        # File tree
         tree_frame = tk.Frame(self, bg=bg)
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=2)
 
@@ -1215,17 +1219,16 @@ class FileManagerWidget(tk.Frame):
             self.tree.bind("<Button-2>", self._context_menu)
             self.tree.bind("<Control-Button-1>", self._context_menu)
 
-        # Status bar
         self.status_var = tk.StringVar(value="Подключение...")
-        tk.Label(self, textvariable=self.status_var, bg="#181825", fg="#6c7086",
-                 font=("Consolas", 8), anchor=tk.W).pack(fill=tk.X, padx=4)
+        tk.Label(self, textvariable=self.status_var, bg="#1e1e2e", fg="#555566",
+                 font=("Helvetica", 8), anchor=tk.W).pack(fill=tk.X, padx=6)
 
-        # Close button
         close_frame = tk.Frame(self, bg=bg)
         close_frame.pack(fill=tk.X, side=tk.BOTTOM)
         tk.Button(close_frame, text="✕ Закрыть вкладку",
-                  bg="#313244", fg="#cdd6f4", activebackground="#45475a",
-                  relief=tk.FLAT, font=("Consolas", 9), padx=6, pady=2,
+                  bg="#2a2a3d", fg="#8899aa", activebackground="#353550",
+                  relief=tk.FLAT, bd=0, font=("Helvetica", 9), padx=8, pady=3,
+                  cursor="hand2", highlightthickness=0,
                   command=self._close).pack(side=tk.RIGHT, padx=4, pady=2)
 
     def _connect_sftp(self):
@@ -1272,8 +1275,8 @@ class FileManagerWidget(tk.Frame):
             self.tree.insert("", tk.END, text=name, values=(size, mtime, perms),
                              tags=("dir" if is_dir else "file",))
 
-        self.tree.tag_configure("dir", foreground="#89b4fa")
-        self.tree.tag_configure("file", foreground="#cdd6f4")
+        self.tree.tag_configure("dir", foreground="#6c8fff")
+        self.tree.tag_configure("file", foreground="#e0e0e8")
 
     @staticmethod
     def _human_size(n):
@@ -1471,8 +1474,8 @@ class FileManagerWidget(tk.Frame):
         if sel:
             self.tree.selection_set(sel)
 
-        menu = tk.Menu(self, tearoff=0, bg="#313244", fg="#cdd6f4",
-                       activebackground="#45475a")
+        menu = tk.Menu(self, tearoff=0, bg="#252536", fg="#e0e0e8",
+                       activebackground="#353550")
         if sel:
             tags = self.tree.item(sel, "tags")
             if "dir" in tags:
@@ -1671,22 +1674,39 @@ class App(tk.Tk):
         style = ttk.Style()
         style.theme_use("clam")
         bg = "#1e1e2e"
-        fg = "#cdd6f4"
+        fg = "#e0e0e8"
+        surface = "#252536"
+        border = "#2e2e42"
+        accent = "#6c8fff"
+        hover = "#353550"
+        muted = "#6c7086"
 
-        style.configure(".", background=bg, foreground=fg, fieldbackground="#313244", borderwidth=0)
+        style.configure(".", background=bg, foreground=fg, fieldbackground=surface,
+                         borderwidth=0, focuscolor=accent)
         style.configure("TFrame", background=bg)
         style.configure("TLabel", background=bg, foreground=fg)
-        style.configure("TButton", background="#45475a", foreground=fg, padding=(10, 5))
-        style.map("TButton", background=[("active", "#585b70")])
-        style.configure("Treeview", background="#313244", foreground=fg, fieldbackground="#313244",
-                         rowheight=28, borderwidth=0)
-        style.configure("Treeview.Heading", background="#45475a", foreground=fg)
-        style.map("Treeview", background=[("selected", "#45475a")])
-        style.configure("TNotebook", background=bg, borderwidth=0)
-        style.configure("TNotebook.Tab", background="#45475a", foreground=fg, padding=(12, 6))
-        style.map("TNotebook.Tab", background=[("selected", "#585b70")])
-        style.configure("TEntry", fieldbackground="#313244", foreground=fg)
-        style.configure("TCombobox", fieldbackground="#313244", foreground=fg)
+        style.configure("TButton", background=surface, foreground=fg, padding=(12, 6),
+                         relief="flat")
+        style.map("TButton", background=[("active", hover)])
+        style.configure("Treeview", background=surface, foreground=fg,
+                         fieldbackground=surface, rowheight=28, borderwidth=0)
+        style.configure("Treeview.Heading", background="#22222f", foreground=muted,
+                         padding=(8, 5), relief="flat", font=("Helvetica", 9))
+        style.map("Treeview", background=[("selected", "#3a3a55")])
+        style.map("Treeview.Heading", background=[("active", "#2a2a3d")])
+        style.configure("TNotebook", background=bg, borderwidth=0, tabmargins=[2, 4, 0, 0])
+        style.configure("TNotebook.Tab", background=surface, foreground=muted,
+                         padding=(18, 8), font=("Helvetica", 10))
+        style.map("TNotebook.Tab", background=[("selected", bg)],
+                  foreground=[("selected", fg)])
+        style.configure("TEntry", fieldbackground=surface, foreground=fg, padding=5)
+        style.configure("TCombobox", fieldbackground=surface, foreground=fg)
+        style.configure("TSeparator", background=border)
+        style.configure("Sash", sashthickness=5, gripcount=0)
+        style.configure("TPanedwindow", background=border)
+        style.configure("TScrollbar", background=surface, troughcolor=bg,
+                         borderwidth=0, relief="flat")
+        style.map("TScrollbar", background=[("active", hover)])
 
     def _zoom(self, delta):
         """Change font size. delta=+1/-1 or 0 to reset."""
@@ -1739,34 +1759,34 @@ class App(tk.Tk):
             canvas.create_oval(dx - 1, dy - 1, dx + 1, dy + 1, fill="#6c8fff", outline="")
 
     def _build_ui(self):
-        # ── Top: minimal title bar (Termius style) ──
-        top_bar = tk.Frame(self, bg="#14141e", height=40)
+        top_bar = tk.Frame(self, bg="#1a1a2a", height=38)
         top_bar.pack(fill=tk.X, side=tk.TOP)
         top_bar.pack_propagate(False)
 
-        tk.Label(top_bar, text=f"{APP_NAME}", bg="#14141e", fg="#e0e0e0",
-                 font=("Helvetica", 13, "bold")).pack(side=tk.LEFT, padx=12, pady=6)
-        tk.Label(top_bar, text=f"v{VERSION}", bg="#14141e", fg="#555",
+        tk.Label(top_bar, text=f"{APP_NAME}", bg="#1a1a2a", fg="#e0e0e8",
+                 font=("Helvetica", 13, "bold")).pack(side=tk.LEFT, padx=14, pady=6)
+        tk.Label(top_bar, text=f"v{VERSION}", bg="#1a1a2a", fg="#555566",
                  font=("Helvetica", 10)).pack(side=tk.LEFT, pady=6)
 
-        # ── Main layout ──
-        main_frame = tk.Frame(self, bg="#1e1e2e")
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        # ── Main layout — horizontal PanedWindow (draggable dividers) ──
+        self.main_paned = tk.PanedWindow(
+            self, orient=tk.HORIZONTAL, bg="#2e2e42",
+            sashwidth=5, sashrelief=tk.FLAT, opaqueresize=True,
+            sashpad=0,
+        )
+        self.main_paned.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
         # Left: card-based session panel
-        self.left_panel = tk.Frame(main_frame, bg="#1e1e2e", width=320)
-        self.left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 4))
-        self.left_panel.pack_propagate(False)
+        self.left_panel = tk.Frame(self.main_paned, bg="#1e1e2e")
         self._build_card_panel(self.left_panel)
+        self.main_paned.add(self.left_panel, minsize=220, width=320)
 
         # Center: terminal tabs
-        center_frame = tk.Frame(main_frame, bg="#1e1e2e")
-        center_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        center_frame = tk.Frame(self.main_paned, bg="#1e1e2e")
 
         self.notebook = ttk.Notebook(center_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
-        # Welcome tab
         welcome = tk.Frame(self.notebook, bg="#1e1e2e")
         self.notebook.add(welcome, text="Welcome")
         tk.Label(
@@ -1782,32 +1802,33 @@ class App(tk.Tk):
             font=("Helvetica", 12),
             justify=tk.CENTER,
             bg="#1e1e2e",
-            fg="#cdd6f4",
+            fg="#e0e0e8",
         ).pack(expand=True)
 
+        self.main_paned.add(center_frame, minsize=300, width=600)
+
         # Right: commands + agent panel
-        self.right_panel = tk.Frame(main_frame, bg="#1e1e2e", width=360)
-        self.right_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(4, 0))
-        self.right_panel.pack_propagate(False)
+        self.right_panel = tk.Frame(self.main_paned, bg="#1e1e2e")
         self._build_right_panel(self.right_panel)
+        self.main_paned.add(self.right_panel, minsize=200, width=360)
 
     # ── Card Panel (Left) ─────────────────────────────────────
 
     def _build_card_panel(self, parent):
-        # Toolbar
-        toolbar = tk.Frame(parent, bg="#181825")
-        toolbar.pack(fill=tk.X)
+        toolbar = tk.Frame(parent, bg="#1e1e2e")
+        toolbar.pack(fill=tk.X, padx=6, pady=(6, 2))
 
-        btn_style = {"bg": "#313244", "fg": "#89b4fa", "activebackground": "#45475a",
-                     "activeforeground": "#b4d0fb", "relief": tk.FLAT,
-                     "font": ("Consolas", 10), "padx": 8, "pady": 4}
+        btn_style = {"bg": "#2a2a3d", "fg": "#8899cc", "activebackground": "#353550",
+                     "activeforeground": "#aabbee", "relief": tk.FLAT, "bd": 0,
+                     "font": ("Helvetica", 10), "padx": 10, "pady": 5,
+                     "cursor": "hand2", "highlightthickness": 0}
 
-        tk.Button(toolbar, text="＋ Сессия", command=self._new_session, **btn_style).pack(side=tk.LEFT, padx=2, pady=3)
-        tk.Button(toolbar, text="＋ Группа", command=self._new_group, **btn_style).pack(side=tk.LEFT, padx=2, pady=3)
-        tk.Button(toolbar, text="✎", command=self._edit_session, width=3, **btn_style).pack(side=tk.LEFT, padx=1, pady=3)
-        tk.Button(toolbar, text="✕", command=self._delete_session, width=3, **btn_style).pack(side=tk.LEFT, padx=1, pady=3)
-        tk.Button(toolbar, text="↑", command=self._export_sessions, width=3, **btn_style).pack(side=tk.RIGHT, padx=1, pady=3)
-        tk.Button(toolbar, text="↓", command=self._import_sessions, width=3, **btn_style).pack(side=tk.RIGHT, padx=1, pady=3)
+        tk.Button(toolbar, text="＋ Сессия", command=self._new_session, **btn_style).pack(side=tk.LEFT, padx=(0, 3), pady=2)
+        tk.Button(toolbar, text="＋ Группа", command=self._new_group, **btn_style).pack(side=tk.LEFT, padx=3, pady=2)
+        tk.Button(toolbar, text="✎", command=self._edit_session, width=3, **btn_style).pack(side=tk.LEFT, padx=2, pady=2)
+        tk.Button(toolbar, text="✕", command=self._delete_session, width=3, **btn_style).pack(side=tk.LEFT, padx=2, pady=2)
+        tk.Button(toolbar, text="↑", command=self._export_sessions, width=3, **btn_style).pack(side=tk.RIGHT, padx=2, pady=2)
+        tk.Button(toolbar, text="↓", command=self._import_sessions, width=3, **btn_style).pack(side=tk.RIGHT, padx=2, pady=2)
 
         # Scrollable card area
         self.card_canvas = tk.Canvas(parent, bg="#1e1e2e", highlightthickness=0)
@@ -1836,45 +1857,49 @@ class App(tk.Tk):
         self.card_canvas.bind("<Button-4>", lambda e: self.card_canvas.yview_scroll(-1, "units"))
         self.card_canvas.bind("<Button-5>", lambda e: self.card_canvas.yview_scroll(1, "units"))
 
-        # Quick connect at bottom
-        qf = tk.Frame(parent, bg="#181825", padx=8, pady=8)
+        qf = tk.Frame(parent, bg="#1e1e2e", padx=10, pady=10)
         qf.pack(fill=tk.X, side=tk.BOTTOM)
 
-        tk.Label(qf, text="Быстрое подключение", bg="#181825", fg="#6c7086",
-                 font=("Consolas", 9, "bold")).pack(anchor="w", pady=(0, 4))
+        sep = tk.Frame(qf, bg="#2e2e42", height=1)
+        sep.pack(fill=tk.X, pady=(0, 8))
 
-        row1 = tk.Frame(qf, bg="#181825")
-        row1.pack(fill=tk.X, pady=1)
-        tk.Label(row1, text="Хост:", bg="#181825", fg="#6c7086", font=("Consolas", 9)).pack(side=tk.LEFT)
-        self.q_host = tk.Entry(row1, width=14, bg="#313244", fg="#cdd6f4",
-                               insertbackground="#cdd6f4", relief=tk.FLAT, font=("Consolas", 9))
-        self.q_host.pack(side=tk.LEFT, padx=(4, 6))
+        tk.Label(qf, text="Быстрое подключение", bg="#1e1e2e", fg="#6c7086",
+                 font=("Helvetica", 9, "bold")).pack(anchor="w", pady=(0, 6))
+
+        entry_style = {"bg": "#252536", "fg": "#e0e0e8", "insertbackground": "#e0e0e8",
+                       "relief": tk.FLAT, "font": ("Helvetica", 10),
+                       "highlightthickness": 1, "highlightcolor": "#6c8fff",
+                       "highlightbackground": "#2e2e42"}
+
+        row1 = tk.Frame(qf, bg="#1e1e2e")
+        row1.pack(fill=tk.X, pady=2)
+        tk.Label(row1, text="Хост:", bg="#1e1e2e", fg="#6c7086", font=("Helvetica", 9)).pack(side=tk.LEFT)
+        self.q_host = tk.Entry(row1, width=14, **entry_style)
+        self.q_host.pack(side=tk.LEFT, padx=(4, 8))
         setup_entry_clipboard(self.q_host)
-        tk.Label(row1, text="Порт:", bg="#181825", fg="#6c7086", font=("Consolas", 9)).pack(side=tk.LEFT)
-        self.q_port = tk.Entry(row1, width=5, bg="#313244", fg="#cdd6f4",
-                               insertbackground="#cdd6f4", relief=tk.FLAT, font=("Consolas", 9))
+        tk.Label(row1, text="Порт:", bg="#1e1e2e", fg="#6c7086", font=("Helvetica", 9)).pack(side=tk.LEFT)
+        self.q_port = tk.Entry(row1, width=5, **entry_style)
         self.q_port.insert(0, "22")
         self.q_port.pack(side=tk.LEFT, padx=4)
         setup_entry_clipboard(self.q_port)
 
-        row2 = tk.Frame(qf, bg="#181825")
-        row2.pack(fill=tk.X, pady=1)
-        tk.Label(row2, text="Юзер:", bg="#181825", fg="#6c7086", font=("Consolas", 9)).pack(side=tk.LEFT)
-        self.q_user = tk.Entry(row2, width=10, bg="#313244", fg="#cdd6f4",
-                               insertbackground="#cdd6f4", relief=tk.FLAT, font=("Consolas", 9))
+        row2 = tk.Frame(qf, bg="#1e1e2e")
+        row2.pack(fill=tk.X, pady=2)
+        tk.Label(row2, text="Юзер:", bg="#1e1e2e", fg="#6c7086", font=("Helvetica", 9)).pack(side=tk.LEFT)
+        self.q_user = tk.Entry(row2, width=10, **entry_style)
         self.q_user.insert(0, "root")
-        self.q_user.pack(side=tk.LEFT, padx=(4, 6))
+        self.q_user.pack(side=tk.LEFT, padx=(4, 8))
         setup_entry_clipboard(self.q_user)
-        tk.Label(row2, text="Пароль:", bg="#181825", fg="#6c7086", font=("Consolas", 9)).pack(side=tk.LEFT)
-        self.q_pass = tk.Entry(row2, width=10, bg="#313244", fg="#cdd6f4", show="*",
-                               insertbackground="#cdd6f4", relief=tk.FLAT, font=("Consolas", 9))
+        tk.Label(row2, text="Пароль:", bg="#1e1e2e", fg="#6c7086", font=("Helvetica", 9)).pack(side=tk.LEFT)
+        self.q_pass = tk.Entry(row2, width=10, show="*", **entry_style)
         self.q_pass.pack(side=tk.LEFT, padx=4)
         setup_entry_clipboard(self.q_pass)
 
-        tk.Button(qf, text="Подключиться", bg="#89b4fa", fg="#1e1e2e",
-                  activebackground="#6c8fff", relief=tk.FLAT,
-                  font=("Consolas", 9, "bold"), pady=3,
-                  command=self._quick_connect).pack(fill=tk.X, pady=(4, 0))
+        tk.Button(qf, text="Подключиться", bg="#6c8fff", fg="#ffffff",
+                  activebackground="#5a7de6", relief=tk.FLAT, bd=0,
+                  font=("Helvetica", 10, "bold"), pady=6, cursor="hand2",
+                  highlightthickness=0,
+                  command=self._quick_connect).pack(fill=tk.X, pady=(6, 0))
         self.q_host.bind("<Return>", lambda e: self._quick_connect())
         self.q_pass.bind("<Return>", lambda e: self._quick_connect())
 
@@ -1913,29 +1938,26 @@ class App(tk.Tk):
             self._create_group_section(self.card_inner, "Без группы", ungrouped, "#6c7086")
 
     def _create_group_section(self, parent, group_name, sessions, color):
-        # Group container with colored left border
         group_frame = tk.Frame(parent, bg="#1e1e2e")
-        group_frame.pack(fill=tk.X, padx=4, pady=(6, 2))
+        group_frame.pack(fill=tk.X, padx=6, pady=(8, 2))
 
-        # Group header
-        header = tk.Frame(group_frame, bg="#181825")
+        header = tk.Frame(group_frame, bg="#1e1e2e")
         header.pack(fill=tk.X)
 
-        # Color indicator
-        tk.Frame(header, bg=color, width=4).pack(side=tk.LEFT, fill=tk.Y)
+        tk.Frame(header, bg=color, width=3).pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
 
-        tk.Label(header, text=f"  {group_name}", bg="#181825", fg=color,
-                 font=("Consolas", 11, "bold"), pady=6).pack(side=tk.LEFT, fill=tk.X, expand=True, anchor="w")
+        tk.Label(header, text=group_name, bg="#1e1e2e", fg=color,
+                 font=("Helvetica", 11, "bold"), pady=5).pack(side=tk.LEFT, fill=tk.X, expand=True, anchor="w")
 
         count_text = f"{len(sessions)}"
-        tk.Label(header, text=count_text, bg="#181825", fg="#6c7086",
-                 font=("Consolas", 9), padx=8).pack(side=tk.RIGHT)
+        tk.Label(header, text=count_text, bg="#1e1e2e", fg="#555566",
+                 font=("Helvetica", 9), padx=8).pack(side=tk.RIGHT)
 
         # Group context menu on header
         if group_name != "Без группы":
             def _group_menu(event, gn=group_name):
-                menu = tk.Menu(self, tearoff=0, bg="#313244", fg="#cdd6f4",
-                               activebackground="#45475a")
+                menu = tk.Menu(self, tearoff=0, bg="#252536", fg="#e0e0e8",
+                               activebackground="#353550")
                 menu.add_command(label="Переименовать", command=lambda: self._rename_group_by_name(gn))
                 menu.add_command(label="Удалить группу", command=lambda: self._delete_group_by_name(gn))
                 menu.tk_popup(event.x_root, event.y_root)
@@ -1965,57 +1987,48 @@ class App(tk.Tk):
 
     def _create_session_card(self, parent, session, index, accent_color):
         is_selected = (index == self._selected_card_idx)
-        card_bg = "#3b3b5c" if is_selected else "#313244"
+        card_bg = "#2e2e42" if is_selected else "#252536"
 
-        card = tk.Frame(parent, bg=card_bg, padx=10, pady=8, cursor="hand2",
-                        highlightbackground=accent_color if is_selected else "#45475a",
-                        highlightthickness=2)
+        card = tk.Frame(parent, bg=card_bg, padx=12, pady=10, cursor="hand2",
+                        highlightbackground=accent_color if is_selected else "#2e2e42",
+                        highlightthickness=1)
 
         name = session.get("name", "???")
         host = session.get("host", "")
         port = session.get("port", 22)
         desc = session.get("description", "")
 
-        # Name
-        name_label = tk.Label(card, text=name, bg=card_bg, fg="#cdd6f4",
-                              font=("Consolas", 10, "bold"), anchor="w")
+        name_label = tk.Label(card, text=name, bg=card_bg, fg="#e0e0e8",
+                              font=("Helvetica", 10, "bold"), anchor="w")
         name_label.pack(fill=tk.X)
 
-        # Description (if any)
         if desc:
-            desc_label = tk.Label(card, text=desc, bg=card_bg, fg="#a6adc8",
-                                  font=("Consolas", 8), anchor="w")
+            desc_label = tk.Label(card, text=desc, bg=card_bg, fg="#8899aa",
+                                  font=("Helvetica", 8), anchor="w")
             desc_label.pack(fill=tk.X)
 
-        # Address
         addr_text = f"{host}:{port}"
-        addr_label = tk.Label(card, text=addr_text, bg=card_bg, fg="#6c7086",
-                              font=("Consolas", 9), anchor="w")
+        addr_label = tk.Label(card, text=addr_text, bg=card_bg, fg="#555566",
+                              font=("Helvetica", 9), anchor="w")
         addr_label.pack(fill=tk.X)
 
-        # Status dot
-        dot_color = accent_color
         dot_canvas = tk.Canvas(card, width=8, height=8, bg=card_bg, highlightthickness=0)
-        dot_canvas.create_oval(1, 1, 7, 7, fill=dot_color, outline="")
+        dot_canvas.create_oval(1, 1, 7, 7, fill=accent_color, outline="")
         dot_canvas.place(relx=1.0, rely=0.0, anchor="ne", x=-4, y=4)
 
         # Bindings
         def _enter(e):
             if index != self._selected_card_idx:
-                card.configure(bg="#3b3b5c")
+                card.configure(bg="#2e2e42")
                 for w in card.winfo_children():
-                    if isinstance(w, tk.Label):
-                        w.configure(bg="#3b3b5c")
-                    elif isinstance(w, tk.Canvas):
-                        w.configure(bg="#3b3b5c")
+                    if isinstance(w, (tk.Label, tk.Canvas)):
+                        w.configure(bg="#2e2e42")
 
         def _leave(e):
-            bg = "#3b3b5c" if index == self._selected_card_idx else "#313244"
+            bg = "#2e2e42" if index == self._selected_card_idx else "#252536"
             card.configure(bg=bg)
             for w in card.winfo_children():
-                if isinstance(w, tk.Label):
-                    w.configure(bg=bg)
-                elif isinstance(w, tk.Canvas):
+                if isinstance(w, (tk.Label, tk.Canvas)):
                     w.configure(bg=bg)
 
         def _click(e):
@@ -2050,13 +2063,13 @@ class App(tk.Tk):
         return card
 
     def _show_card_context_menu(self, event, index):
-        menu = tk.Menu(self, tearoff=0, bg="#313244", fg="#cdd6f4",
-                       activebackground="#45475a")
+        menu = tk.Menu(self, tearoff=0, bg="#252536", fg="#e0e0e8",
+                       activebackground="#353550")
         menu.add_command(label="Подключиться", command=lambda: self._connect_by_idx(index))
         menu.add_separator()
 
         # Move to group submenu
-        move_menu = tk.Menu(menu, tearoff=0, bg="#313244", fg="#cdd6f4")
+        move_menu = tk.Menu(menu, tearoff=0, bg="#252536", fg="#e0e0e8")
         move_menu.add_command(label="Без группы", command=lambda: self._move_and_refresh(index, ""))
         for g in self.store.groups:
             move_menu.add_command(label=g, command=lambda g=g: self._move_and_refresh(index, g))
@@ -2075,22 +2088,20 @@ class App(tk.Tk):
     # ── Right Panel (Commands + Agent) ────────────────────────
 
     def _build_right_panel(self, parent):
-        # Toggle button for commands
-        toggle_frame = tk.Frame(parent, bg="#181825")
-        toggle_frame.pack(fill=tk.X)
+        toggle_frame = tk.Frame(parent, bg="#1e1e2e")
+        toggle_frame.pack(fill=tk.X, padx=6, pady=(6, 2))
 
         self._toggle_btn = tk.Button(
             toggle_frame, text="Команды ▼" if self._commands_visible else "Команды ▶",
-            bg="#181825", fg="#89b4fa", activebackground="#181825", activeforeground="#6c8fff",
-            relief=tk.FLAT, font=("Consolas", 10, "bold"), cursor="hand2",
-            command=self._toggle_commands,
+            bg="#1e1e2e", fg="#8899cc", activebackground="#1e1e2e", activeforeground="#aabbee",
+            relief=tk.FLAT, bd=0, font=("Helvetica", 10, "bold"), cursor="hand2",
+            highlightthickness=0, command=self._toggle_commands,
         )
-        self._toggle_btn.pack(side=tk.LEFT, padx=6, pady=4)
+        self._toggle_btn.pack(side=tk.LEFT)
 
-        # Paned window for commands + agent (draggable splitter)
         self._right_paned = tk.PanedWindow(
-            parent, orient=tk.VERTICAL, bg="#45475a",
-            sashwidth=6, sashrelief=tk.FLAT, opaqueresize=True,
+            parent, orient=tk.VERTICAL, bg="#2e2e42",
+            sashwidth=5, sashrelief=tk.FLAT, opaqueresize=True,
         )
         self._right_paned.pack(fill=tk.BOTH, expand=True)
 
@@ -2104,9 +2115,10 @@ class App(tk.Tk):
         search_frame.pack(fill=tk.X, padx=4, pady=4)
         tk.Label(search_frame, text="Поиск:", bg="#1e1e2e", fg="#6c7086",
                  font=("Consolas", 9)).pack(side=tk.LEFT)
-        self.cmd_search = tk.Entry(search_frame, bg="#313244", fg="#cdd6f4",
-                                   insertbackground="#cdd6f4", relief=tk.FLAT,
-                                   font=("Consolas", 9))
+        self.cmd_search = tk.Entry(search_frame, bg="#252536", fg="#e0e0e8",
+                                   insertbackground="#e0e0e8", relief=tk.FLAT,
+                                   font=("Helvetica", 9), highlightthickness=1,
+                                   highlightcolor="#6c8fff", highlightbackground="#2e2e42")
         self.cmd_search.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
         setup_entry_clipboard(self.cmd_search)
         self.cmd_search.bind("<KeyRelease>", self._filter_commands)
@@ -2137,11 +2149,11 @@ class App(tk.Tk):
         agent_wrapper = tk.Frame(self._right_paned, bg="#1e1e2e")
         self._right_paned.add(agent_wrapper, minsize=120)
 
-        agent_header = tk.Frame(agent_wrapper, bg="#181825")
-        agent_header.pack(fill=tk.X)
+        agent_header = tk.Frame(agent_wrapper, bg="#1e1e2e")
+        agent_header.pack(fill=tk.X, padx=6, pady=(6, 2))
 
-        tk.Label(agent_header, text="Поиск команд", bg="#181825", fg="#a6e3a1",
-                 font=("Consolas", 11, "bold")).pack(side=tk.LEFT, padx=6, pady=4)
+        tk.Label(agent_header, text="Поиск команд", bg="#1e1e2e", fg="#7ecfa0",
+                 font=("Helvetica", 11, "bold")).pack(side=tk.LEFT)
 
         # Agent content
         self.agent_frame = tk.Frame(agent_wrapper, bg="#1e1e2e")
@@ -2151,24 +2163,26 @@ class App(tk.Tk):
         agent_input = tk.Frame(self.agent_frame, bg="#1e1e2e")
         agent_input.pack(fill=tk.X, pady=(0, 4))
 
-        self.agent_entry = tk.Entry(agent_input, bg="#313244", fg="#cdd6f4",
-                                     insertbackground="#cdd6f4", relief=tk.FLAT,
-                                     font=("Consolas", 10))
+        self.agent_entry = tk.Entry(agent_input, bg="#252536", fg="#e0e0e8",
+                                     insertbackground="#e0e0e8", relief=tk.FLAT,
+                                     font=("Helvetica", 10), highlightthickness=1,
+                                     highlightcolor="#6c8fff", highlightbackground="#2e2e42")
         self.agent_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
         setup_entry_clipboard(self.agent_entry)
         self.agent_entry.insert(0, "как обновить ubuntu?")
         self.agent_entry.bind("<Return>", lambda e: self._agent_ask())
 
-        tk.Button(agent_input, text="Спросить", bg="#a6e3a1", fg="#1e1e2e",
-                  activebackground="#89b4fa", relief=tk.FLAT,
-                  font=("Consolas", 9, "bold"), padx=8, pady=2,
+        tk.Button(agent_input, text="Спросить", bg="#7ecfa0", fg="#1e1e2e",
+                  activebackground="#5ab882", relief=tk.FLAT, bd=0,
+                  font=("Helvetica", 9, "bold"), padx=10, pady=3,
+                  cursor="hand2", highlightthickness=0,
                   command=self._agent_ask).pack(side=tk.RIGHT)
 
         # Result area
         self.agent_result = tk.Text(
-            self.agent_frame, bg="#181825", fg="#cdd6f4",
+            self.agent_frame, bg="#1e1e2e", fg="#e0e0e8",
             font=("Consolas", 9), wrap=tk.WORD, borderwidth=0,
-            insertbackground="#cdd6f4", highlightthickness=0,
+            insertbackground="#e0e0e8", highlightthickness=0,
         )
         agent_scroll = ttk.Scrollbar(self.agent_frame, command=self.agent_result.yview)
         self.agent_result.configure(yscrollcommand=agent_scroll.set)
@@ -2177,7 +2191,7 @@ class App(tk.Tk):
 
         self.agent_result.tag_configure("cmd", foreground="#a6e3a1", font=("Consolas", 9, "bold"))
         self.agent_result.tag_configure("desc", foreground="#6c7086")
-        self.agent_result.tag_configure("platform", foreground="#89b4fa")
+        self.agent_result.tag_configure("platform", foreground="#6c8fff")
         self.agent_result.tag_configure("hint", foreground="#f9e2af")
         self.agent_result.tag_configure("error", foreground="#f38ba8")
         self.agent_result.tag_configure("ai", foreground="#cba6f7")
@@ -2425,21 +2439,23 @@ class App(tk.Tk):
 
         close_btn_frame = tk.Frame(term, bg="#1e1e2e")
 
-        btn_s = {"bg": "#313244", "fg": "#89b4fa", "activebackground": "#45475a",
-                 "relief": tk.FLAT, "font": ("Consolas", 9), "padx": 6, "pady": 2}
+        btn_s = {"bg": "#2a2a3d", "fg": "#8899cc", "activebackground": "#353550",
+                 "relief": tk.FLAT, "bd": 0, "font": ("Helvetica", 9), "padx": 8, "pady": 3,
+                 "cursor": "hand2", "highlightthickness": 0}
         tk.Button(close_btn_frame, text="SFTP",
                   command=lambda: self._open_file_manager(term),
-                  **btn_s).pack(side=tk.LEFT, padx=4, pady=2)
+                  **btn_s).pack(side=tk.LEFT, padx=4, pady=3)
         tk.Button(close_btn_frame, text="Reconnect",
                   command=lambda: self._reconnect_terminal(term),
-                  **btn_s).pack(side=tk.LEFT, padx=4, pady=2)
+                  **btn_s).pack(side=tk.LEFT, padx=4, pady=3)
 
         tk.Button(
             close_btn_frame, text="Close",
-            bg="#313244", fg="#cdd6f4", activebackground="#45475a",
-            relief=tk.FLAT, font=("Consolas", 9), padx=6, pady=2,
+            bg="#2a2a3d", fg="#8899aa", activebackground="#353550",
+            relief=tk.FLAT, bd=0, font=("Helvetica", 9), padx=8, pady=3,
+            cursor="hand2", highlightthickness=0,
             command=lambda: self._close_tab(term),
-        ).pack(side=tk.RIGHT, padx=4, pady=2)
+        ).pack(side=tk.RIGHT, padx=4, pady=3)
         close_btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
 
     def _open_file_manager(self, term):
