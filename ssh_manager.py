@@ -15,8 +15,6 @@ import re
 import base64
 import socket
 import urllib.request
-import urllib.error
-import ssl
 from datetime import datetime
 from pathlib import Path
 import stat
@@ -733,10 +731,46 @@ class SessionStore:
             self.sessions[index].update(kwargs)
             self.save()
 
+    def duplicate(self, index):
+        """Duplicate a session (copy with ' (копия)' suffix)."""
+        if 0 <= index < len(self.sessions):
+            s = dict(self.sessions[index])
+            s["name"] = s.get("name", "") + " (копия)"
+            s["created"] = datetime.now().isoformat()
+            self.sessions.insert(index + 1, s)
+            self.save()
+            return s
+
     def move_to_group(self, index, group):
         if 0 <= index < len(self.sessions):
             self.sessions[index]["group"] = group
             self.save()
+
+    def export_json(self):
+        """Export sessions + groups as dict (passwords decoded for portability)."""
+        data = {"groups": list(self.groups), "sessions": []}
+        for s in self.sessions:
+            e = dict(s)
+            e["password"] = self._decode(e.get("password", ""))
+            data["sessions"].append(e)
+        return data
+
+    def import_json(self, data):
+        """Import sessions from export dict. Merges, doesn't overwrite."""
+        for g in data.get("groups", []):
+            if g and g not in self.groups:
+                self.groups.append(g)
+        for s in data.get("sessions", []):
+            s["password"] = self._encode(s.get("password", ""))
+            # Skip exact duplicates
+            dup = False
+            for existing in self.sessions:
+                if existing["host"] == s.get("host") and existing["port"] == s.get("port") and existing["user"] == s.get("user"):
+                    dup = True
+                    break
+            if not dup:
+                self.sessions.append(s)
+        self.save()
 
     def get_password(self, session):
         return self._decode(session.get("password", ""))
@@ -838,20 +872,28 @@ class TerminalWidget(tk.Frame):
         self.text.tag_configure("error", foreground="#f38ba8")
         self.text.tag_configure("info", foreground="#89b4fa")
 
-    def connect(self, host, port, user, password):
+    def connect(self, host, port, user, password, key_file=None):
         self.running = True
         self._write(f"Подключение к {user}@{host}:{port}...\n", "info")
-        t = threading.Thread(target=self._connect_thread, args=(host, port, user, password), daemon=True)
+        t = threading.Thread(target=self._connect_thread, args=(host, port, user, password, key_file), daemon=True)
         t.start()
 
-    def _connect_thread(self, host, port, user, password):
+    def _connect_thread(self, host, port, user, password, key_file=None):
         try:
             self.ssh = paramiko.SSHClient()
             self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            self.ssh.connect(
-                host, port=port, username=user, password=password,
-                timeout=10, look_for_keys=False, allow_agent=False,
-            )
+            connect_kw = dict(host=host, port=port, username=user, timeout=10)
+            if key_file and os.path.isfile(key_file):
+                connect_kw["key_filename"] = key_file
+                connect_kw["look_for_keys"] = False
+                connect_kw["allow_agent"] = False
+                if password:
+                    connect_kw["passphrase"] = password
+            else:
+                connect_kw["password"] = password
+                connect_kw["look_for_keys"] = False
+                connect_kw["allow_agent"] = False
+            self.ssh.connect(**connect_kw)
             cols = max(80, self.text.winfo_width() // 8)
             rows = max(24, self.text.winfo_height() // 16)
             self.channel = self.ssh.invoke_shell(
@@ -1007,6 +1049,7 @@ class SessionDialog(tk.Toplevel):
             ("Порт:", "port", str(session.get("port", 22)) if session else "22"),
             ("Пользователь:", "user", session.get("user", "") if session else "root"),
             ("Пароль:", "password", ""),
+            ("SSH ключ:", "key_file", session.get("key_file", "") if session else ""),
         ]
 
         self.entries = {}
@@ -1022,6 +1065,14 @@ class SessionDialog(tk.Toplevel):
             entry.grid(row=i, column=1, sticky="ew", pady=3, padx=(8, 0))
             setup_entry_clipboard(entry)
             self.entries[key] = entry
+
+        # Browse button for SSH key file
+        key_entry = self.entries["key_file"]
+        browse_btn = tk.Button(frame, text="...", bg="#45475a", fg="#cdd6f4",
+                               relief=tk.FLAT, font=("Consolas", 9), padx=4,
+                               command=self._browse_key)
+        key_row = len(fields) - 1  # last field
+        browse_btn.grid(row=key_row, column=2, padx=4, pady=3)
 
         row_group = len(fields)
         tk.Label(frame, text="Группа:", bg="#1e1e2e", fg="#cdd6f4",
@@ -1053,6 +1104,16 @@ class SessionDialog(tk.Toplevel):
         self.bind("<Escape>", lambda e: self.destroy())
         self.wait_window()
 
+    def _browse_key(self):
+        path = filedialog.askopenfilename(
+            parent=self, title="SSH ключ",
+            initialdir=os.path.expanduser("~/.ssh"),
+            filetypes=[("All", "*"), ("PEM", "*.pem"), ("Key", "*.key")],
+        )
+        if path:
+            self.entries["key_file"].delete(0, tk.END)
+            self.entries["key_file"].insert(0, path)
+
     def _ok(self):
         host = self.entries["host"].get().strip()
         if not host:
@@ -1070,145 +1131,12 @@ class SessionDialog(tk.Toplevel):
             "port": port,
             "user": self.entries["user"].get().strip() or "root",
             "password": self.entries["password"].get(),
+            "key_file": self.entries["key_file"].get().strip(),
             "group": self.group_var.get().strip(),
         }
         self.destroy()
 
 
-# ── AI Agent Settings Dialog ──────────────────────────────────
-
-class AISettingsDialog(tk.Toplevel):
-    def __init__(self, parent, config):
-        super().__init__(parent)
-        self.title("Настройки AI-агента")
-        self.config = config
-        self.result = None
-        self.resizable(False, False)
-        self.configure(bg="#1e1e2e")
-        self.grab_set()
-
-        frame = tk.Frame(self, bg="#1e1e2e", padx=20, pady=20)
-        frame.pack(fill=tk.BOTH, expand=True)
-
-        tk.Label(frame, text="AI-провайдер", bg="#1e1e2e", fg="#cdd6f4",
-                 font=("Consolas", 12, "bold")).pack(anchor="w", pady=(0, 10))
-
-        self.provider_var = tk.StringVar(value=config.get("ai_provider", "local"))
-
-        providers = [
-            ("local", "Локальная база (без API)"),
-            ("claude", "Claude API (Anthropic)"),
-            ("deepseek", "DeepSeek API"),
-        ]
-        for val, label in providers:
-            rb = tk.Radiobutton(
-                frame, text=label, variable=self.provider_var, value=val,
-                bg="#1e1e2e", fg="#cdd6f4", selectcolor="#313244",
-                activebackground="#1e1e2e", activeforeground="#cdd6f4",
-                font=("Consolas", 10),
-            )
-            rb.pack(anchor="w", pady=2)
-
-        tk.Frame(frame, bg="#45475a", height=1).pack(fill=tk.X, pady=10)
-
-        tk.Label(frame, text="Claude API Key:", bg="#1e1e2e", fg="#cdd6f4",
-                 font=("Consolas", 10)).pack(anchor="w")
-        self.claude_key = tk.Entry(frame, width=50, bg="#313244", fg="#cdd6f4",
-                                   insertbackground="#cdd6f4", relief=tk.FLAT,
-                                   font=("Consolas", 9), show="*")
-        self.claude_key.insert(0, config.get("claude_api_key", ""))
-        self.claude_key.pack(fill=tk.X, pady=(2, 8))
-        setup_entry_clipboard(self.claude_key)
-
-        tk.Label(frame, text="DeepSeek API Key:", bg="#1e1e2e", fg="#cdd6f4",
-                 font=("Consolas", 10)).pack(anchor="w")
-        self.deepseek_key = tk.Entry(frame, width=50, bg="#313244", fg="#cdd6f4",
-                                      insertbackground="#cdd6f4", relief=tk.FLAT,
-                                      font=("Consolas", 9), show="*")
-        self.deepseek_key.insert(0, config.get("deepseek_api_key", ""))
-        self.deepseek_key.pack(fill=tk.X, pady=(2, 12))
-        setup_entry_clipboard(self.deepseek_key)
-
-        btn_frame = tk.Frame(frame, bg="#1e1e2e")
-        btn_frame.pack()
-        tk.Button(btn_frame, text="Сохранить", bg="#89b4fa", fg="#1e1e2e",
-                  activebackground="#6c8fff", relief=tk.FLAT,
-                  font=("Consolas", 10, "bold"), padx=20, pady=4,
-                  command=self._save).pack(side=tk.LEFT, padx=4)
-        tk.Button(btn_frame, text="Отмена", bg="#45475a", fg="#cdd6f4",
-                  activebackground="#585b70", relief=tk.FLAT,
-                  font=("Consolas", 10), padx=20, pady=4,
-                  command=self.destroy).pack(side=tk.LEFT, padx=4)
-
-        self.wait_window()
-
-    def _save(self):
-        self.result = {
-            "ai_provider": self.provider_var.get(),
-            "claude_api_key": self.claude_key.get().strip(),
-            "deepseek_api_key": self.deepseek_key.get().strip(),
-        }
-        self.destroy()
-
-
-# ── AI API Caller ─────────────────────────────────────────────
-
-def _ssl_context():
-    """Create SSL context — skip verify on Windows/frozen (often missing certs)."""
-    if sys.platform == "win32" or getattr(sys, "frozen", False):
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        return ctx
-    return None  # use default on macOS/Linux
-
-
-def call_claude_api(api_key, query):
-    url = "https://api.anthropic.com/v1/messages"
-    payload = json.dumps({
-        "model": "claude-sonnet-4-20250514",
-        "max_tokens": 1024,
-        "system": AI_SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": query}],
-    }).encode("utf-8")
-
-    req = urllib.request.Request(url, data=payload, method="POST")
-    req.add_header("x-api-key", api_key)
-    req.add_header("anthropic-version", "2023-06-01")
-    req.add_header("content-type", "application/json")
-
-    ctx = _ssl_context()
-    resp = urllib.request.urlopen(req, timeout=30, context=ctx)
-    data = json.loads(resp.read().decode("utf-8"))
-    text = ""
-    for block in data.get("content", []):
-        if block.get("type") == "text":
-            text += block["text"]
-    return text
-
-
-def call_deepseek_api(api_key, query):
-    url = "https://api.deepseek.com/v1/chat/completions"
-    payload = json.dumps({
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": AI_SYSTEM_PROMPT},
-            {"role": "user", "content": query},
-        ],
-        "max_tokens": 1024,
-    }).encode("utf-8")
-
-    req = urllib.request.Request(url, data=payload, method="POST")
-    req.add_header("Authorization", f"Bearer {api_key}")
-    req.add_header("Content-Type", "application/json")
-
-    ctx = _ssl_context()
-    resp = urllib.request.urlopen(req, timeout=30, context=ctx)
-    data = json.loads(resp.read().decode("utf-8"))
-    choices = data.get("choices", [])
-    if choices:
-        return choices[0].get("message", {}).get("content", "")
-    return ""
 
 
 # ── SFTP File Manager Widget ──────────────────────────────────
@@ -1266,10 +1194,11 @@ class FileManagerWidget(tk.Frame):
         cols = ("size", "modified", "perms")
         self.tree = ttk.Treeview(tree_frame, columns=cols, show="tree headings",
                                   selectmode="browse")
-        self.tree.heading("#0", text="Имя")
-        self.tree.heading("size", text="Размер")
-        self.tree.heading("modified", text="Изменён")
-        self.tree.heading("perms", text="Права")
+        self.tree.heading("#0", text="Имя", command=lambda: self._sort_column("#0"))
+        self.tree.heading("size", text="Размер", command=lambda: self._sort_column("size"))
+        self.tree.heading("modified", text="Изменён", command=lambda: self._sort_column("modified"))
+        self.tree.heading("perms", text="Права", command=lambda: self._sort_column("perms"))
+        self._sort_reverse = False
         self.tree.column("#0", width=250, minwidth=150)
         self.tree.column("size", width=80, minwidth=60)
         self.tree.column("modified", width=140, minwidth=100)
@@ -1353,6 +1282,15 @@ class FileManagerWidget(tk.Frame):
                 return f"{n:.0f} {unit}" if n == int(n) else f"{n:.1f} {unit}"
             n /= 1024
         return f"{n:.1f} ТБ"
+
+    def _sort_column(self, col):
+        """Sort tree by column, toggle ascending/descending."""
+        items = [(self.tree.set(k, col) if col != "#0" else self.tree.item(k, "text"),
+                  k) for k in self.tree.get_children("")]
+        self._sort_reverse = not self._sort_reverse
+        items.sort(key=lambda t: t[0].lower(), reverse=self._sort_reverse)
+        for idx, (_, k) in enumerate(items):
+            self.tree.move(k, "", idx)
 
     def _get_selected_name(self):
         sel = self.tree.selection()
@@ -1801,40 +1739,15 @@ class App(tk.Tk):
             canvas.create_oval(dx - 1, dy - 1, dx + 1, dy + 1, fill="#6c8fff", outline="")
 
     def _build_ui(self):
-        # ── Top: PCA brand bar ──
-        top_bar = tk.Frame(self, bg="#181825", height=48)
+        # ── Top: minimal title bar (Termius style) ──
+        top_bar = tk.Frame(self, bg="#14141e", height=40)
         top_bar.pack(fill=tk.X, side=tk.TOP)
         top_bar.pack_propagate(False)
 
-        logo_canvas = tk.Canvas(top_bar, width=36, height=36, bg="#181825", highlightthickness=0)
-        logo_canvas.pack(side=tk.LEFT, padx=(10, 6), pady=6)
-        self._draw_pca_logo(logo_canvas, 18, 16, 30)
-
-        brand_frame = tk.Frame(top_bar, bg="#181825")
-        brand_frame.pack(side=tk.LEFT, pady=4)
-        tk.Label(brand_frame, text=APP_NAME, bg="#181825", fg="#cdd6f4",
-                 font=("Consolas", 13, "bold")).pack(anchor="w")
-        tk.Label(brand_frame, text=APP_SUBTITLE, bg="#181825", fg="#6c7086",
-                 font=("Consolas", 9)).pack(anchor="w")
-
-        tk.Frame(top_bar, bg="#45475a", width=1).pack(side=tk.LEFT, fill=tk.Y, padx=12, pady=8)
-
-        links = [
-            ("GitHub", "https://github.com/nickolay-frolov"),
-            ("Boosty", "https://boosty.to/lot_andrey"),
-            ("Telegram", "https://t.me/lot_andrey"),
-            ("Поддержать (СБП)", "https://finance.ozon.ru/apps/sbp/ozonbankpay/019dc200-2a5d-7931-a619-782d285f6798"),
-        ]
-        for i, (text, url) in enumerate(links):
-            if i > 0:
-                tk.Label(top_bar, text="·", bg="#181825", fg="#6c7086", font=("Consolas", 9)).pack(side=tk.LEFT)
-            lnk = tk.Label(top_bar, text=text, bg="#181825", fg="#89b4fa",
-                           font=("Consolas", 9, "underline"), cursor="hand2")
-            lnk.pack(side=tk.LEFT, padx=6)
-            lnk.bind("<Button-1>", lambda e, u=url: self._open_url(u))
-
-        tk.Label(top_bar, text="@lot_andrey", bg="#181825", fg="#6c7086",
-                 font=("Consolas", 9)).pack(side=tk.RIGHT, padx=10)
+        tk.Label(top_bar, text=f"{APP_NAME}", bg="#14141e", fg="#e0e0e0",
+                 font=("Helvetica", 13, "bold")).pack(side=tk.LEFT, padx=12, pady=6)
+        tk.Label(top_bar, text=f"v{VERSION}", bg="#14141e", fg="#555",
+                 font=("Helvetica", 10)).pack(side=tk.LEFT, pady=6)
 
         # ── Main layout ──
         main_frame = tk.Frame(self, bg="#1e1e2e")
@@ -1855,17 +1768,18 @@ class App(tk.Tk):
 
         # Welcome tab
         welcome = tk.Frame(self.notebook, bg="#1e1e2e")
-        self.notebook.add(welcome, text="Добро пожаловать")
+        self.notebook.add(welcome, text="Welcome")
         tk.Label(
             welcome,
             text=f"{APP_NAME} v{VERSION}\n\n"
-                 "• Двойной клик по карточке = подключение\n"
-                 "• Быстрое подключение внизу слева\n"
-                 "• Все сессии сохраняются автоматически\n"
-                 "• Ctrl+C/D/L работают в терминале\n"
-                 "• AI-агент справа — спроси что угодно\n"
-                 "• Панель команд можно скрыть/показать",
-            font=("Consolas", 12),
+                 "Double-click a card to connect\n"
+                 "Quick connect panel at bottom left\n"
+                 "Sessions auto-saved\n"
+                 "SSH key auth supported\n"
+                 "SFTP file manager per connection\n"
+                 "Export/Import sessions via toolbar\n"
+                 "Cmd+/- to zoom",
+            font=("Helvetica", 12),
             justify=tk.CENTER,
             bg="#1e1e2e",
             fg="#cdd6f4",
@@ -1892,6 +1806,8 @@ class App(tk.Tk):
         tk.Button(toolbar, text="＋ Группа", command=self._new_group, **btn_style).pack(side=tk.LEFT, padx=2, pady=3)
         tk.Button(toolbar, text="✎", command=self._edit_session, width=3, **btn_style).pack(side=tk.LEFT, padx=1, pady=3)
         tk.Button(toolbar, text="✕", command=self._delete_session, width=3, **btn_style).pack(side=tk.LEFT, padx=1, pady=3)
+        tk.Button(toolbar, text="↑", command=self._export_sessions, width=3, **btn_style).pack(side=tk.RIGHT, padx=1, pady=3)
+        tk.Button(toolbar, text="↓", command=self._import_sessions, width=3, **btn_style).pack(side=tk.RIGHT, padx=1, pady=3)
 
         # Scrollable card area
         self.card_canvas = tk.Canvas(parent, bg="#1e1e2e", highlightthickness=0)
@@ -2146,6 +2062,7 @@ class App(tk.Tk):
             move_menu.add_command(label=g, command=lambda g=g: self._move_and_refresh(index, g))
         menu.add_cascade(label="Переместить в...", menu=move_menu)
         menu.add_separator()
+        menu.add_command(label="Дублировать", command=lambda: self._duplicate_session(index))
         menu.add_command(label="Изменить", command=lambda: self._edit_session_by_idx(index))
         menu.add_command(label="Удалить", command=lambda: self._delete_session_by_idx(index))
 
@@ -2216,28 +2133,15 @@ class App(tk.Tk):
 
         self._populate_commands()
 
-        # ── Agent Panel ──
+        # ── Agent Panel (local knowledge base) ──
         agent_wrapper = tk.Frame(self._right_paned, bg="#1e1e2e")
         self._right_paned.add(agent_wrapper, minsize=120)
 
         agent_header = tk.Frame(agent_wrapper, bg="#181825")
         agent_header.pack(fill=tk.X)
 
-        tk.Label(agent_header, text="AI Агент", bg="#181825", fg="#a6e3a1",
+        tk.Label(agent_header, text="Поиск команд", bg="#181825", fg="#a6e3a1",
                  font=("Consolas", 11, "bold")).pack(side=tk.LEFT, padx=6, pady=4)
-
-        # Provider indicator
-        provider = self.config.get("ai_provider", "local")
-        provider_names = {"local": "Локальный", "claude": "Claude", "deepseek": "DeepSeek"}
-        self._provider_label = tk.Label(
-            agent_header, text=f"[{provider_names.get(provider, provider)}]",
-            bg="#181825", fg="#6c7086", font=("Consolas", 8),
-        )
-        self._provider_label.pack(side=tk.LEFT, padx=2)
-
-        tk.Button(agent_header, text="⚙", bg="#181825", fg="#6c7086",
-                  activebackground="#181825", relief=tk.FLAT, font=("Consolas", 11),
-                  cursor="hand2", command=self._ai_settings).pack(side=tk.RIGHT, padx=6)
 
         # Agent content
         self.agent_frame = tk.Frame(agent_wrapper, bg="#1e1e2e")
@@ -2295,40 +2199,19 @@ class App(tk.Tk):
             self._right_paned.forget(self.commands_container)
             self._toggle_btn.configure(text="Команды ▶")
 
-    # ── AI Agent ──────────────────────────────────────────────
-
-    def _ai_settings(self):
-        dlg = AISettingsDialog(self, self.config.data)
-        if dlg.result:
-            for k, v in dlg.result.items():
-                self.config.set(k, v)
-            provider = self.config.get("ai_provider", "local")
-            provider_names = {"local": "Локальный", "claude": "Claude", "deepseek": "DeepSeek"}
-            self._provider_label.configure(text=f"[{provider_names.get(provider, provider)}]")
+    # ── Command Search (local knowledge base) ─────────────────
 
     def _agent_ask(self):
         query = self.agent_entry.get().strip()
         if not query:
             return
-
-        provider = self.config.get("ai_provider", "local")
-
-        if provider == "local":
-            self._agent_ask_local(query)
-        elif provider in ("claude", "deepseek"):
-            self._agent_ask_api(query, provider)
-
-    def _agent_ask_local(self, query):
         results = agent_search(query)
         self.agent_result.configure(state=tk.NORMAL)
         self.agent_result.delete("1.0", tk.END)
         if not results:
-            self.agent_result.insert(tk.END, "Не нашёл команд. Попробуй другие слова:\n", "desc")
+            self.agent_result.insert(tk.END, "Ничего не найдено. Попробуй:\n", "desc")
             self.agent_result.insert(tk.END, "обновить, диск, память, порт, пароль,\n", "hint")
-            self.agent_result.insert(tk.END, "docker, nginx, ssl, vpn, wifi, dhcp\n\n", "hint")
-            self.agent_result.insert(tk.END, "Совет: ", "desc")
-            self.agent_result.insert(tk.END, "подключи Claude или DeepSeek API\n", "ai")
-            self.agent_result.insert(tk.END, "для умного ассистента (⚙ настройки)", "ai")
+            self.agent_result.insert(tk.END, "docker, nginx, ssl, vpn, wifi, dhcp\n", "hint")
         else:
             self.agent_result.insert(tk.END, "Двойной клик по команде = отправить\n\n", "desc")
             for _, platform, cmd, desc in results:
@@ -2336,82 +2219,6 @@ class App(tk.Tk):
                 self.agent_result.insert(tk.END, f"{cmd}\n", "cmd")
                 self.agent_result.insert(tk.END, f"  {desc}\n", "desc")
         self.agent_result.configure(state=tk.DISABLED)
-
-    def _agent_ask_api(self, query, provider):
-        self.agent_result.configure(state=tk.NORMAL)
-        self.agent_result.delete("1.0", tk.END)
-        self.agent_result.insert(tk.END, "Думаю...\n", "thinking")
-        self.agent_result.configure(state=tk.DISABLED)
-
-        def _call():
-            try:
-                if provider == "claude":
-                    api_key = self.config.get("claude_api_key", "")
-                    if not api_key:
-                        return None, "API-ключ Claude не задан. Нажми ⚙"
-                    response = call_claude_api(api_key, query)
-                elif provider == "deepseek":
-                    api_key = self.config.get("deepseek_api_key", "")
-                    if not api_key:
-                        return None, "API-ключ DeepSeek не задан. Нажми ⚙"
-                    response = call_deepseek_api(api_key, query)
-                else:
-                    return None, "Неизвестный провайдер"
-                return response, None
-            except urllib.error.HTTPError as e:
-                body = e.read().decode("utf-8", errors="replace")[:200]
-                return None, f"HTTP {e.code}: {body}"
-            except Exception as e:
-                return None, str(e)
-
-        def _on_result(response, error):
-            self.agent_result.configure(state=tk.NORMAL)
-            self.agent_result.delete("1.0", tk.END)
-            if error:
-                self.agent_result.insert(tk.END, f"Ошибка: {error}\n", "error")
-            else:
-                self.agent_result.insert(tk.END, "Двойной клик по команде = отправить\n\n", "desc")
-                # Parse response for commands
-                lines = response.strip().split("\n")
-                for line in lines:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    # Try to detect command lines: starts with [linux]/[keenetic] or contains command pattern
-                    if line.startswith("[linux]") or line.startswith("[keenetic]"):
-                        parts = line.split("] ", 1)
-                        platform = parts[0] + "]"
-                        rest = parts[1] if len(parts) > 1 else ""
-                        if " — " in rest:
-                            cmd, desc = rest.split(" — ", 1)
-                            self.agent_result.insert(tk.END, f"{platform} ", "platform")
-                            self.agent_result.insert(tk.END, f"{cmd.strip()}\n", "cmd")
-                            self.agent_result.insert(tk.END, f"  {desc.strip()}\n", "desc")
-                        else:
-                            self.agent_result.insert(tk.END, f"{platform} ", "platform")
-                            self.agent_result.insert(tk.END, f"{rest}\n", "cmd")
-                    elif line.startswith("`") or line.startswith("$") or line.startswith("sudo ") or line.startswith("show "):
-                        # Looks like a command
-                        cmd = line.strip("`").strip("$ ")
-                        self.agent_result.insert(tk.END, f"{cmd}\n", "cmd")
-                    elif " — " in line or " - " in line:
-                        sep = " — " if " — " in line else " - "
-                        cmd, desc = line.split(sep, 1)
-                        cmd = cmd.strip().strip("`").strip("$ ")
-                        if cmd:
-                            self.agent_result.insert(tk.END, f"{cmd}\n", "cmd")
-                            self.agent_result.insert(tk.END, f"  {desc.strip()}\n", "desc")
-                        else:
-                            self.agent_result.insert(tk.END, f"{line}\n", "ai")
-                    else:
-                        self.agent_result.insert(tk.END, f"{line}\n", "ai")
-            self.agent_result.configure(state=tk.DISABLED)
-
-        def _thread():
-            response, error = _call()
-            self.after(0, lambda: _on_result(response, error))
-
-        threading.Thread(target=_thread, daemon=True).start()
 
     def _agent_send_cmd(self, event):
         idx = self.agent_result.index(f"@{event.x},{event.y}")
@@ -2491,7 +2298,8 @@ class App(tk.Tk):
     def _connect_by_idx(self, idx):
         s = self.store.sessions[idx]
         pw = self.store.get_password(s)
-        self._open_terminal(s["host"], s["port"], s["user"], pw, s["name"])
+        self._open_terminal(s["host"], s["port"], s["user"], pw, s["name"],
+                            key_file=s.get("key_file"))
 
     def _new_session(self):
         pregroup = ""
@@ -2502,8 +2310,11 @@ class App(tk.Tk):
                              groups=self.store.groups)
         if dlg.result:
             r = dlg.result
-            self.store.add(r["host"], r["port"], r["user"], r["password"],
-                           r["name"], r.get("group", ""))
+            s = self.store.add(r["host"], r["port"], r["user"], r["password"],
+                               r["name"], r.get("group", ""))
+            if r.get("key_file"):
+                idx = len(self.store.sessions) - 1
+                self.store.update(idx, key_file=r["key_file"])
             self._refresh_cards()
 
     def _edit_session(self):
@@ -2518,7 +2329,8 @@ class App(tk.Tk):
             r = dlg.result
             update = {"name": r["name"], "description": r.get("description", ""),
                       "host": r["host"], "port": r["port"],
-                      "user": r["user"], "group": r.get("group", "")}
+                      "user": r["user"], "group": r.get("group", ""),
+                      "key_file": r.get("key_file", "")}
             if r["password"]:
                 update["password"] = r["password"]
             self.store.update(idx, **update)
@@ -2534,6 +2346,35 @@ class App(tk.Tk):
             self.store.remove(idx)
             self._selected_card_idx = None
             self._refresh_cards()
+
+    def _duplicate_session(self, idx):
+        self.store.duplicate(idx)
+        self._refresh_cards()
+
+    def _export_sessions(self):
+        path = filedialog.asksaveasfilename(
+            parent=self, title="Экспорт сессий",
+            defaultextension=".json", filetypes=[("JSON", "*.json")],
+            initialfile="pca_sessions.json")
+        if path:
+            data = self.store.export_json()
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            messagebox.showinfo("Экспорт", f"Экспортировано {len(data['sessions'])} сессий", parent=self)
+
+    def _import_sessions(self):
+        path = filedialog.askopenfilename(
+            parent=self, title="Импорт сессий",
+            filetypes=[("JSON", "*.json")])
+        if path:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self.store.import_json(data)
+                self._refresh_cards()
+                messagebox.showinfo("Импорт", "Сессии импортированы", parent=self)
+            except Exception as e:
+                messagebox.showerror("Ошибка импорта", str(e), parent=self)
 
     def _new_group(self):
         name = simpledialog.askstring("Новая группа", "Название группы:", parent=self)
@@ -2570,27 +2411,31 @@ class App(tk.Tk):
         self._open_terminal(host, port, user, pw)
         self.q_pass.delete(0, tk.END)
 
-    def _open_terminal(self, host, port, user, password, name=None):
+    def _open_terminal(self, host, port, user, password, name=None, key_file=None):
         tab_name = name or f"{user}@{host}"
 
         term = TerminalWidget(self.notebook, on_close=lambda: None)
         self.notebook.add(term, text=f"● {tab_name}")
         self.notebook.select(term)
-        term.connect(host, port, user, password)
+        term.connect(host, port, user, password, key_file=key_file)
 
-        # Store connection info for file manager
-        term._conn_info = {"host": host, "port": port, "user": user, "password": password}
+        # Store connection info for file manager and reconnect
+        term._conn_info = {"host": host, "port": port, "user": user,
+                           "password": password, "key_file": key_file}
 
         close_btn_frame = tk.Frame(term, bg="#1e1e2e")
 
         btn_s = {"bg": "#313244", "fg": "#89b4fa", "activebackground": "#45475a",
                  "relief": tk.FLAT, "font": ("Consolas", 9), "padx": 6, "pady": 2}
-        tk.Button(close_btn_frame, text="📁 Файлы",
+        tk.Button(close_btn_frame, text="SFTP",
                   command=lambda: self._open_file_manager(term),
+                  **btn_s).pack(side=tk.LEFT, padx=4, pady=2)
+        tk.Button(close_btn_frame, text="Reconnect",
+                  command=lambda: self._reconnect_terminal(term),
                   **btn_s).pack(side=tk.LEFT, padx=4, pady=2)
 
         tk.Button(
-            close_btn_frame, text="✕ Закрыть",
+            close_btn_frame, text="Close",
             bg="#313244", fg="#cdd6f4", activebackground="#45475a",
             relief=tk.FLAT, font=("Consolas", 9), padx=6, pady=2,
             command=lambda: self._close_tab(term),
@@ -2618,16 +2463,36 @@ class App(tk.Tk):
         self.notebook.add(fm, text=tab_name)
         self.notebook.select(fm)
 
-        # Connect in background
+        # Connect in background (with key auth support)
         def _connect():
             try:
-                ssh2.connect(info["host"], port=info["port"],
-                             username=info["user"], password=info["password"],
-                             timeout=10, look_for_keys=False, allow_agent=False)
+                connect_kw = dict(hostname=info["host"], port=info["port"],
+                                  username=info["user"], timeout=10)
+                key_file = info.get("key_file")
+                if key_file and os.path.isfile(key_file):
+                    connect_kw["key_filename"] = key_file
+                    connect_kw["look_for_keys"] = False
+                    connect_kw["allow_agent"] = False
+                    if info.get("password"):
+                        connect_kw["passphrase"] = info["password"]
+                else:
+                    connect_kw["password"] = info["password"]
+                    connect_kw["look_for_keys"] = False
+                    connect_kw["allow_agent"] = False
+                ssh2.connect(**connect_kw)
                 fm.after(0, fm._connect_sftp)
             except Exception as e:
                 fm.after(0, lambda: fm.status_var.set(f"Ошибка SSH: {e}"))
         threading.Thread(target=_connect, daemon=True).start()
+
+    def _reconnect_terminal(self, term):
+        info = getattr(term, "_conn_info", None)
+        if not info:
+            return
+        term.disconnect()
+        term._write("\n--- Переподключение ---\n", "info")
+        term.connect(info["host"], info["port"], info["user"], info["password"],
+                     key_file=info.get("key_file"))
 
     def _close_tab(self, term):
         term.disconnect()
